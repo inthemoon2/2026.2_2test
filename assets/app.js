@@ -28,6 +28,17 @@
     });
     return out;
   }
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = pageOf(id); return pg ? pg.no + '단계' : ''; }
+  function fieldLabel(id) { if (!id) return ''; const f = fieldDef(id); return f ? f.label : ''; }
+  // 같은 페이지의 다른 조원이 보고 있는 칸에 "누가 보는 중" 표시
+  function renderWho() {
+    $$('[data-who]').forEach(function (e) { e.textContent = ''; });
+    (S.st.presence || []).forEach(function (p) {
+      if (p.name === S.me || !p.field || p.page !== S.page) return;
+      const e = $('[data-who="' + p.field + '"]'); if (!e) return;
+      e.textContent = (e.textContent ? e.textContent + ', ' : '✎ ') + p.name + (e.textContent ? '' : ' 님이 보는 중');
+    });
+  }
   function pagePct(pgId) {
     const pg = pageOf(pgId); let t = 0, d = 0;
     pg.sections.forEach(function (sc) {
@@ -88,7 +99,7 @@
     app.innerHTML = '<div class="wrap"><p class="muted">프로젝트를 불러오는 중…</p></div>';
     try {
       if (!S.schema) S.schema = await api('schema');
-      S.st = await api('loadProject', { page: S.page, tid: VIEW || undefined }, S.token);
+      S.st = await api('loadProject', { page: S.page, field: S.focus || '', tid: VIEW || undefined }, S.token);
       S.me = S.st.me.name;
     } catch (e) { if (fatal(e)) return; app.innerHTML = '<div class="wrap"><div class="banner bad">' + esc(e.message) + '</div><p><button class="btn" onclick="location.reload()">다시 시도</button></p></div>'; return; }
     renderShell();
@@ -105,22 +116,34 @@
       '<button class="btn sm" id="lo">' + (S.viewOnly ? '닫기' : '나가기') + '</button></div></header>' +
       '<nav class="nav" id="nav" aria-label="단계"></nav>' +
       '<main class="wrap" id="main"></main>';
-    $('#lo').addEventListener('click', async function () { if (S.viewOnly) { if (!window.close()) location.href = 'admin.html'; return; } await saveNow(); logout(); });
+    $('#lo').addEventListener('click', async function () { if (S.viewOnly) { if (!window.close()) location.href = 'admin.html'; return; } setSaveState('저장 중…');
+      const left = await flush();
+      if (left.length && !window.confirm('아직 저장되지 않은 내용이 ' + left.length + '칸 있어요.\n(충돌이 해결되지 않았거나 인터넷 연결 문제일 수 있어요)\n그래도 나갈까요? 나가면 이 내용은 사라져요.')) return;
+      logout(); });
     $('#nav').addEventListener('click', function (e) { const b = e.target.closest('button[data-p]'); if (b) show(b.dataset.p); });
     const main = $('#main');
     main.addEventListener('input', onInput);
     main.addEventListener('change', onInput);
     main.addEventListener('focusout', function (e) { if (e.target.closest('[data-fid]')) saveNow(); });
+    main.addEventListener('focusin', function (e) { const el = e.target.closest('[data-fid]'); const id = el ? el.dataset.fid : ''; if (id !== S.focus) { S.focus = id; clearTimeout(S.focusTimer); S.focusTimer = setTimeout(poll, 1200); } });
     main.addEventListener('click', onClick);
     window.addEventListener('beforeunload', function (e) { if (Object.keys(S.dirty).length) { e.preventDefault(); e.returnValue = ''; } });
-    document.addEventListener('visibilitychange', function () { if (!document.hidden && S.st) poll(); });
+    document.addEventListener('visibilitychange', function () { if (document.hidden) saveNow(); else if (S.st) poll(); });
+    // 탭을 닫는 순간에도 마지막 입력을 보내 본다(브라우저가 허용하는 범위에서 최선). 보통은 자동 저장이 먼저 끝나 있어요.
+    window.addEventListener('pagehide', function () {
+      if (!S.token || !S.st || locked()) return;
+      const ids = Object.keys(S.dirty).filter(function (id) { return !(id in S.conflicts); }); if (!ids.length) return;
+      const fields = {}; ids.forEach(function (id) { fields[id] = { val: S.dirty[id], baseV: S.base[id] || 0 }; });
+      try { fetch(window.APP_CONFIG.API_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'saveFields', payload: { page: S.page, fields: fields }, token: S.token }) }); } catch (e) { /* 무시 */ }
+    });
     renderTop();
   }
 
   function renderTop() {
     const t = S.st.team;
     $('#ttl').textContent = (S.viewOnly ? '[교사 보기] ' : '') + t.cls + '반 ' + t.no + '조 · ' + t.field + (S.st.locked ? ' (제출 완료)' : '');
-    $('#pres').innerHTML = (S.st.presence || []).length ? '<span class="dot"></span>접속 중: ' + (S.st.presence || []).map(function (p) { return esc(p.name) + (p.name === S.me ? '(나)' : ''); }).join(', ') : '';
+    $('#pres').innerHTML = (S.st.presence || []).length ? '<span class="dot"></span>접속 중: ' + (S.st.presence || []).map(function (p) { return '<span title="' + esc(fieldLabel(p.field)) + '">' + esc(p.name) + (p.name === S.me ? '(나)' : '') + ' · ' + esc(pageLabel(p.page)) + '</span>'; }).join(', ') : '';
+    renderWho();
     renderNav();
   }
   function renderNav() {
@@ -140,13 +163,15 @@
 
   async function show(id) {
     if (id !== 'home' && !pageOf(id)) id = 'home';
-    await saveNow();
+    await flush();
+    S.focus = '';
     S.page = id; history.replaceState(null, '', '#' + id);
     renderNav();
     const main = $('#main');
     main.innerHTML = id === 'home' ? homeHtml() : pageHtml(pageOf(id));
     window.scrollTo(0, 0);
     if (id !== 'home') { $$('textarea', main).forEach(updateCount); }
+    renderWho();
     pollNow();
   }
 
@@ -226,11 +251,11 @@
       case 'textarea': ctl = '<textarea id="f_' + esc(id) + '" data-fid="' + esc(id) + '" placeholder="' + esc(f.ph || '') + '"' + dis + '>' + esc(v) + '</textarea><div class="cnt" data-cnt="' + esc(id) + '"></div>'; break;
       case 'select': ctl = '<select id="f_' + esc(id) + '" data-fid="' + esc(id) + '"' + dis + '><option value="">선택하세요</option>' + f.opts.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>'; break;
       case 'multiselect': { const sel = v.split('|'); ctl = '<div class="opts" data-fid="' + esc(id) + '" data-multi="1">' + f.opts.map(function (o) { return '<label><input type="checkbox" value="' + esc(o) + '"' + (sel.indexOf(o) >= 0 ? ' checked' : '') + dis + '>' + esc(o) + '</label>'; }).join('') + '</div>'; break; }
-      case 'checkbox': ctl = '<label style="font-weight:400"><input type="checkbox" id="f_' + esc(id) + '" data-fid="' + esc(id) + '" data-check="1"' + (v === 'Y' ? ' checked' : '') + dis + '> ' + esc(f.ph || '확인했어요') + '</label>'; return '<div class="field" data-field="' + esc(id) + '">' + '<div class="f" style="font-weight:600">' + label + '</div>' + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div></div>';
+      case 'checkbox': ctl = '<label style="font-weight:400"><input type="checkbox" id="f_' + esc(id) + '" data-fid="' + esc(id) + '" data-check="1"' + (v === 'Y' ? ' checked' : '') + dis + '> ' + esc(f.ph || '확인했어요') + '</label>'; return '<div class="field" data-field="' + esc(id) + '">' + '<div class="f" style="font-weight:600">' + label + '</div>' + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div><div class="who-here" data-who="' + esc(id) + '"></div></div>';
       case 'file': ctl = fileHtml(f, id); break;
       default: ctl = '<input id="f_' + esc(id) + '" data-fid="' + esc(id) + '" type="' + (f.type === 'number' ? 'number' : f.type === 'url' ? 'url' : 'text') + '"' + (f.type === 'number' ? ' step="any"' : '') + ' value="' + esc(v) + '" placeholder="' + esc(f.ph || '') + '"' + dis + '>';
     }
-    return '<div class="field" data-field="' + esc(id) + '">' + (f.type === 'file' ? '<div class="f" style="font-weight:600">' + label + '</div>' : lab) + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div></div>';
+    return '<div class="field" data-field="' + esc(id) + '">' + (f.type === 'file' ? '<div class="f" style="font-weight:600">' + label + '</div>' : lab) + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div><div class="who-here" data-who="' + esc(id) + '"></div></div>';
   }
 
   /* ---- 파일 칸 ---- */
@@ -287,12 +312,18 @@
   }
   function setSaveState(t) { const e = $('#saveState'); if (e) e.textContent = t; }
 
-  async function saveNow() {
+  // 저장은 한 번에 하나씩. 진행 중이면 그 저장이 끝나길 기다릴 수 있도록 약속(Promise)을 돌려준다
+  function saveNow() {
     clearTimeout(S.timer);
-    if (S.saving || !S.st || locked()) return;
+    if (S.inflight) return S.inflight;
+    if (!S.st || locked()) return Promise.resolve();
+    S.inflight = doSave().then(function () { S.inflight = null; }, function () { S.inflight = null; });
+    return S.inflight;
+  }
+  async function doSave() {
     const ids = Object.keys(S.dirty).filter(function (id) { return !(id in S.conflicts); });
     if (!ids.length) return;
-    S.saving = true; setSaveState('저장 중…');
+    S.saveFailed = false; setSaveState('저장 중…');
     const sent = {}, fields = {};
     ids.forEach(function (id) { sent[id] = S.dirty[id]; fields[id] = { val: S.dirty[id], baseV: S.base[id] || 0 }; setFieldClass(id, 'saving'); });
     try {
@@ -307,13 +338,25 @@
       setSaveState(r.conflicts.length ? '⚠ 충돌이 있어요' : '✓ 저장됨 ' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       renderNav();
     } catch (e) {
+      S.saveFailed = true;
       ids.forEach(function (id) { setFieldClass(id, 'dirty'); });
       if (!fatal(e)) {
-        if (e.code === 'LOCKED') { toast(e.message, 'err'); S.st = await api('loadProject', { page: S.page }, S.token).catch(function () { return S.st; }); renderTop(); show(S.page); }
+        if (e.code === 'LOCKED') { toast(e.message, 'err'); S.st = await api('loadProject', { page: S.page, tid: VIEW || undefined }, S.token).catch(function () { return S.st; }); renderTop(); show(S.page); }
         else { setSaveState('⚠ 저장 실패(다시 시도 중)'); toast(e.message, 'err'); S.timer = setTimeout(saveNow, 6000); }
       }
-    } finally { S.saving = false; }
-    if (Object.keys(S.dirty).some(function (id) { return !(id in S.conflicts); })) S.timer = setTimeout(saveNow, 800);
+    }
+    if (!S.saveFailed && Object.keys(S.dirty).some(function (id) { return !(id in S.conflicts); })) S.timer = setTimeout(saveNow, 800);
+  }
+  // 나가기 등에서 쓰는 "모두 저장될 때까지 기다리기". 저장하지 못한 칸 id 목록을 돌려준다
+  async function flush() {
+    for (let i = 0; i < 6; i++) {
+      if (S.inflight) await S.inflight;
+      const pending = Object.keys(S.dirty).filter(function (id) { return !(id in S.conflicts); });
+      if (!pending.length || S.saveFailed) break;
+      await saveNow();
+    }
+    if (S.inflight) await S.inflight;
+    return Object.keys(S.dirty);
   }
   function setFieldClass(id, cls) { const w = $('[data-field="' + id + '"]'); if (w) w.className = 'field ' + cls; }
 
@@ -401,7 +444,7 @@
   async function poll() {
     if (polling || !S.st || !S.token) return; polling = true;
     try {
-      const r = await api('pollProject', { rev: S.st.rev, page: S.page, tid: VIEW || undefined }, S.token);
+      const r = await api('pollProject', { rev: S.st.rev, page: S.page, field: S.focus || '', tid: VIEW || undefined }, S.token);
       S.st.presence = r.presence;
       if (r.changed) {
         const wasLocked = S.st.locked;

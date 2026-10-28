@@ -42,6 +42,7 @@ input[disabled],select[disabled],textarea[disabled],input[readonly],textarea[rea
 .field.saved{border-left-color:var(--ok)}
 .field.conflict{border-left-color:var(--bad)}
 .stat{font-size:.8125rem;color:var(--mute);min-height:1.2em}
+.who-here{font-size:.8125rem;color:var(--brand-d);font-weight:600}
 .opts{display:flex;flex-wrap:wrap;gap:6px 14px}
 .opts label{display:inline-flex;gap:6px;align-items:center;font-weight:400}
 

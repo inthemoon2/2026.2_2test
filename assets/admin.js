@@ -37,6 +37,15 @@
     $('#main').addEventListener('change', onChange);
     go(A.tab);
   }
+  let mouseDown = false;
+  document.addEventListener('mousedown', function () { mouseDown = true; }, true);
+  document.addEventListener('mouseup', function () { mouseDown = false; }, true);
+  setInterval(async function () {
+    if (A.tab !== 'overview' || !A.token || document.hidden || mouseDown) return;
+    const ae = document.activeElement; if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.id !== 'clsf') return;
+    try { await loadOverview(); if (A.tab === 'overview' && !mouseDown) { const m = $('#main'); const y = window.scrollY; m.innerHTML = overviewHtml(); window.scrollTo(0, y); } } catch (e) { /* 다음 주기에 다시 */ }
+  }, 15000);
+
   async function go(t) {
     const my = (A.nav = (A.nav || 0) + 1);    // 탭을 빠르게 바꿨을 때 먼저 시작한 화면이 나중에 덮어쓰지 않도록
     A.tab = t;
@@ -57,6 +66,8 @@
   }
 
   /* ───────── 진행 현황 ───────── */
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = (A.ov.pages || []).filter(function (p) { return p.id === id; })[0]; return pg ? pg.no + '단계 ' + pg.title : id; }
+  function fieldLabel(id) { if (!id) return ''; let r = ''; ((A.schema || {}).pages || []).forEach(function (p) { p.sections.forEach(function (s) { s.fields.forEach(function (f) { if (f.id === String(id).split('@')[0]) r = f.label; }); }); }); return r ? '보는 칸: ' + r : ''; }
   function overviewHtml() {
     const o = A.ov, classes = Array.from(new Set(o.teams.map(function (t) { return t.cls; })));
     const teams = o.teams.filter(function (t) { return !A.filter || t.cls === A.filter; });
@@ -65,14 +76,14 @@
     return '<div class="card"><div class="row"><h2 class="grow" style="margin:0">진행 현황</h2>' +
       '<select id="clsf" style="width:auto"><option value="">전체 반</option>' + classes.map(function (c) { return '<option value="' + esc(c) + '"' + (A.filter === c ? ' selected' : '') + '>' + esc(c) + '반</option>'; }).join('') + '</select>' +
       '<button class="btn ghost sm" data-act="refresh">새로고침</button></div>' +
-      '<p class="small muted">조 ' + teams.length + '개 · 제출 완료 ' + sub + '개. 단계별 숫자는 필수 항목 작성 비율(%)입니다.</p>' +
-      '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>반-조</th><th>분야</th><th>상태</th><th>전체</th>' + o.pages.map(function (p) { return '<th title="' + esc(p.title) + '">' + p.no + '단계</th>'; }).join('') + '<th>마지막 수정</th><th>점검</th><th></th></tr></thead><tbody>' +
+      '<p class="small muted">조 ' + teams.length + '개 · 제출 완료 ' + sub + '개. 단계별 숫자는 필수 항목 작성 비율(%)입니다. <b>접속 중</b>은 최근 40초 안에 화면을 연 학생과 그 위치이고, 15초마다 자동으로 갱신돼요.</p>' +
+      '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>반-조</th><th>분야</th><th>상태</th><th>전체</th>' + o.pages.map(function (p) { return '<th title="' + esc(p.title) + '">' + p.no + '단계</th>'; }).join('') + '<th>접속 중 (위치)</th><th>마지막 수정</th><th>점검</th><th></th></tr></thead><tbody>' +
       teams.map(function (t) {
         const warn = []; if (!t.hasPw) warn.push('<span class="badge warn">비번 미발급</span>'); if (t.noSid) warn.push('<span class="badge warn">학번 ' + t.noSid + '명 없음</span>'); if (t.nStudents < 3 || t.nStudents > 5) warn.push('<span class="badge warn">' + t.nStudents + '명</span>');
         return '<tr><td><b>' + esc(t.cls) + '-' + esc(t.no) + '</b></td><td>' + esc(t.field) + '</td><td>' + (t.status === '제출완료' ? '<span class="badge ok">제출 완료</span>' : '<span class="badge">작성 중</span>') + (t.scored ? ' <span class="badge brand">채점됨</span>' : '') + '</td>' +
           '<td style="min-width:90px"><div class="bar' + (t.progress === 100 ? ' full' : '') + '"><i style="width:' + t.progress + '%"></i></div><span class="small">' + t.progress + '%</span></td>' +
           o.pages.map(function (p) { const v = t.pages[p.id]; return '<td class="small">' + (v == null ? '-' : v + '%') + '</td>'; }).join('') +
-          '<td class="small">' + esc(t.lastEdit || '-') + '<br><span class="muted">' + esc(t.lastBy || '') + '</span></td><td>' + warn.join(' ') + '</td>' +
+          '<td class="small">' + (t.online && t.online.length ? t.online.map(function (p) { return '<div title="' + esc(fieldLabel(p.field)) + '"><span class="dot"></span>' + esc(p.name) + ' · ' + esc(pageLabel(p.page)) + '</div>'; }).join('') : '<span class="muted">-</span>') + '</td><td class="small">' + esc(t.lastEdit || '-') + '<br><span class="muted">' + esc(t.lastBy || '') + '</span></td><td>' + warn.join(' ') + '</td>' +
           '<td style="white-space:nowrap"><button class="btn sm ghost" data-open="' + esc(t.tid) + '">채점·상세</button> <button class="btn sm ghost" data-view="' + esc(t.tid) + '">화면 보기</button> ' + (t.reportId ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(PJ.reportLink(t.reportId)) + '">보고서</a> ' : '') + (t.status === '제출완료' ? '<button class="btn sm danger ghost" data-reopen="' + esc(t.tid) + '">수정 허용</button>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
   }
