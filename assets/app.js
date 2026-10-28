@@ -2,7 +2,8 @@
 (function () {
   const { esc, $, $$, api, toast } = PJ;
   const app = document.getElementById('app');
-  const S = { schema: null, token: PJ.store.get('pj_token') || '', st: null, page: 'home', dirty: {}, base: {}, conflicts: {}, timer: null, poller: null, saving: false, me: '' };
+  const VIEW = new URLSearchParams(location.search).get('view') || '';   // ?view=조ID : 교사가 조 화면을 읽기 전용으로 보기
+  const S = { schema: null, token: VIEW ? (PJ.store.get('pj_admin') || '') : (PJ.store.get('pj_token') || ''), viewOnly: !!VIEW, st: null, page: 'home', dirty: {}, base: {}, conflicts: {}, timer: null, poller: null, saving: false, me: '' };
 
   /* ───────── 기본 도우미 ───────── */
   const fieldKey = function (f, name) { return f.perMember ? f.id + '@' + name : f.id; };
@@ -11,7 +12,7 @@
     const id = fieldKey(f, name);
     return String(curVal(id)).trim() !== '';
   };
-  const locked = function () { return !!(S.st && S.st.locked); };
+  const locked = function () { return S.viewOnly || !!(S.st && S.st.locked); };
   const pageOf = function (id) { return S.schema.pages.filter(function (p) { return p.id === id; })[0]; };
 
   function missingList() {
@@ -74,6 +75,7 @@
   }
 
   function logout(msg) {
+    if (S.viewOnly) { S.token = ''; S.st = null; stopTimers(); app.innerHTML = '<div class="wrap"><div class="banner warn">' + esc(msg || '관리자 로그인이 필요해요.') + '</div><p><a class="btn" href="admin.html">관리자 페이지로</a></p></div>'; return; }
     S.token = ''; PJ.store.del('pj_token'); S.st = null; S.dirty = {}; S.base = {}; S.conflicts = {};
     renderLogin(msg || '');
   }
@@ -81,11 +83,12 @@
   /* ───────── 시작 ───────── */
   async function boot() {
     if (!PJ.apiReady()) return renderLogin();
+    if (S.viewOnly && !S.token) { app.innerHTML = '<div class="wrap"><div class="banner warn">교사 보기는 <b>관리자 페이지의 "화면 보기" 버튼</b>으로 열어야 해요. (관리자 로그인이 필요합니다)</div><p><a class="btn" href="admin.html">관리자 페이지로</a></p></div>'; return; }
     if (!S.token) return renderLogin();
     app.innerHTML = '<div class="wrap"><p class="muted">프로젝트를 불러오는 중…</p></div>';
     try {
       if (!S.schema) S.schema = await api('schema');
-      S.st = await api('loadProject', { page: S.page }, S.token);
+      S.st = await api('loadProject', { page: S.page, tid: VIEW || undefined }, S.token);
       S.me = S.st.me.name;
     } catch (e) { if (fatal(e)) return; app.innerHTML = '<div class="wrap"><div class="banner bad">' + esc(e.message) + '</div><p><button class="btn" onclick="location.reload()">다시 시도</button></p></div>'; return; }
     renderShell();
@@ -99,10 +102,10 @@
       '<header class="top"><div class="wrap">' +
       '<b id="ttl"></b><span class="grow"></span><span id="pres" class="small"></span>' +
       '<span id="saveState" class="small" aria-live="polite"></span>' +
-      '<button class="btn sm" id="lo">나가기</button></div></header>' +
+      '<button class="btn sm" id="lo">' + (S.viewOnly ? '닫기' : '나가기') + '</button></div></header>' +
       '<nav class="nav" id="nav" aria-label="단계"></nav>' +
       '<main class="wrap" id="main"></main>';
-    $('#lo').addEventListener('click', async function () { await saveNow(); logout(); });
+    $('#lo').addEventListener('click', async function () { if (S.viewOnly) { if (!window.close()) location.href = 'admin.html'; return; } await saveNow(); logout(); });
     $('#nav').addEventListener('click', function (e) { const b = e.target.closest('button[data-p]'); if (b) show(b.dataset.p); });
     const main = $('#main');
     main.addEventListener('input', onInput);
@@ -116,7 +119,7 @@
 
   function renderTop() {
     const t = S.st.team;
-    $('#ttl').textContent = t.cls + '반 ' + t.no + '조 · ' + t.field + (S.st.locked ? ' (제출 완료)' : '');
+    $('#ttl').textContent = (S.viewOnly ? '[교사 보기] ' : '') + t.cls + '반 ' + t.no + '조 · ' + t.field + (S.st.locked ? ' (제출 완료)' : '');
     $('#pres').innerHTML = (S.st.presence || []).length ? '<span class="dot"></span>접속 중: ' + (S.st.presence || []).map(function (p) { return esc(p.name) + (p.name === S.me ? '(나)' : ''); }).join(', ') : '';
     renderNav();
   }
@@ -176,6 +179,7 @@
 
   function lockedBanner() {
     const t = S.st.team;
+    if (S.viewOnly) return '<div class="banner info"><b>교사 보기(읽기 전용)</b> — 학생들이 쓰는 내용이 몇 초마다 자동으로 갱신돼요. 이 화면에서는 수정·제출할 수 없습니다.' + (t.reportId ? '<br><a href="' + esc(PJ.reportLink(t.reportId)) + '" target="_blank" rel="noopener">보고서 보기</a>' : '') + '</div>';
     return '<div class="banner ok"><b>제출이 완료되어 수정할 수 없어요.</b> (' + esc(t.submitAt || '') + ' · ' + esc(t.submitBy || '') + ')<br>' +
       (t.reportId ? '<a href="' + esc(PJ.reportLink(t.reportId)) + '" target="_blank" rel="noopener">보고서 보기</a> · <a href="' + esc(PJ.reportLink(t.reportId) + '&print=1') + '" target="_blank" rel="noopener">PDF로 저장하기</a>' : '') +
       '<br><span class="small">고쳐야 할 내용이 있으면 선생님께 말씀드려 "수정 허용"을 받아 주세요.</span></div>';
@@ -366,7 +370,7 @@
 
   /* ───────── 제출 ───────── */
   function submitHtml() {
-    if (S.st.locked) return '';
+    if (S.st.locked || S.viewOnly) return '';
     const miss = missingList();
     return '<div class="card" id="submitCard"><h2>교사에게 제출하기</h2>' +
       (miss.length ? '<div class="banner warn"><b>아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요.</b><ul class="small">' + miss.slice(0, 12).map(function (m) { return '<li><a href="#' + m.page + '" data-go="' + m.page + '" onclick="return false">' + esc(pageOf(m.page).no + '단계') + '</a> ' + esc(m.label) + '</li>'; }).join('') + (miss.length > 12 ? '<li>…외 ' + (miss.length - 12) + '개</li>' : '') + '</ul></div>' : '<div class="banner ok">필수 항목을 모두 작성했어요. 제출 전에 한 번 더 읽어 보세요.</div>') +
@@ -397,7 +401,7 @@
   async function poll() {
     if (polling || !S.st || !S.token) return; polling = true;
     try {
-      const r = await api('pollProject', { rev: S.st.rev, page: S.page }, S.token);
+      const r = await api('pollProject', { rev: S.st.rev, page: S.page, tid: VIEW || undefined }, S.token);
       S.st.presence = r.presence;
       if (r.changed) {
         const wasLocked = S.st.locked;

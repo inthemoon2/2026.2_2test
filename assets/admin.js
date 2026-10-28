@@ -73,7 +73,7 @@
           '<td style="min-width:90px"><div class="bar' + (t.progress === 100 ? ' full' : '') + '"><i style="width:' + t.progress + '%"></i></div><span class="small">' + t.progress + '%</span></td>' +
           o.pages.map(function (p) { const v = t.pages[p.id]; return '<td class="small">' + (v == null ? '-' : v + '%') + '</td>'; }).join('') +
           '<td class="small">' + esc(t.lastEdit || '-') + '<br><span class="muted">' + esc(t.lastBy || '') + '</span></td><td>' + warn.join(' ') + '</td>' +
-          '<td style="white-space:nowrap"><button class="btn sm ghost" data-open="' + esc(t.tid) + '">채점·상세</button> ' + (t.reportId ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(PJ.reportLink(t.reportId)) + '">보고서</a> ' : '') + (t.status === '제출완료' ? '<button class="btn sm danger ghost" data-reopen="' + esc(t.tid) + '">수정 허용</button>' : '') + '</td></tr>';
+          '<td style="white-space:nowrap"><button class="btn sm ghost" data-open="' + esc(t.tid) + '">채점·상세</button> <button class="btn sm ghost" data-view="' + esc(t.tid) + '">화면 보기</button> ' + (t.reportId ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(PJ.reportLink(t.reportId)) + '">보고서</a> ' : '') + (t.status === '제출완료' ? '<button class="btn sm danger ghost" data-reopen="' + esc(t.tid) + '">수정 허용</button>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
   }
 
@@ -186,7 +186,7 @@
   }
   function teamHtml(d) {
     const t = d.team, E = A.schema.elems;
-    let h = '<div class="card"><h2>' + esc(t.cls) + '반 ' + esc(t.no) + '조 · ' + esc(t.field) + ' ' + (t.status === '제출완료' ? '<span class="badge ok">제출 ' + esc(t.submitAt) + '</span>' : '<span class="badge">작성 중</span>') + '</h2><p class="small">작성 진행률 ' + t.progress + '% ' + (t.reportId ? '· <a target="_blank" rel="noopener" href="' + esc(PJ.reportLink(t.reportId)) + '">보고서 열기</a>' : '· 아직 보고서 없음') + '</p></div>';
+    let h = '<div class="card"><h2>' + esc(t.cls) + '반 ' + esc(t.no) + '조 · ' + esc(t.field) + ' ' + (t.status === '제출완료' ? '<span class="badge ok">제출 ' + esc(t.submitAt) + '</span>' : '<span class="badge">작성 중</span>') + '</h2><p class="small"><button class="btn sm ghost" data-view="' + esc(t.tid) + '">학생 작업 화면 보기(읽기 전용)</button> 작성 진행률 ' + t.progress + '% ' + (t.reportId ? '· <a target="_blank" rel="noopener" href="' + esc(PJ.reportLink(t.reportId)) + '">보고서 열기</a>' : '· 아직 보고서 없음') + '</p></div>';
     h += '<div class="card"><h2>조 점수 (기획안 · 전처리 · 모델 생성 · 모델 평가)</h2>';
     E.forEach(function (e) {
       const r = A.schema.rubric[e], v = d.virtual[e], ts = d.teamScore[e];
@@ -298,6 +298,7 @@
   async function onClick(e) {
     const t2 = e.target.closest('[data-t2]'); if (t2) return go(t2.dataset.t2);
     const op = e.target.closest('[data-open]'); if (op) { A.team = { team: { tid: op.dataset.open } }; return go('score').then(function () { const s = $('#tsel'); if (s) s.value = op.dataset.open; }); }
+    const vw = e.target.closest('[data-view]'); if (vw) { window.open('index.html?view=' + encodeURIComponent(vw.dataset.view), '_blank'); return; }   // noopener 를 쓰지 않아야 관리자 로그인 정보가 새 탭에 전달돼요
     const ro = e.target.closest('[data-reopen]'); if (ro) { if (!confirm('이 조가 다시 수정할 수 있게 할까요? (보고서 링크는 그대로 유지돼요)')) return; return guard(async function () { await call('reopenTeam', { tid: ro.dataset.reopen }); toast('수정을 허용했어요', 'ok'); go('overview'); })(); }
     const us = e.target.closest('[data-use]'); if (us) { const r = $('input[name="lv_' + us.dataset.use + '"][value="' + us.dataset.v + '"]'); if (r) { r.checked = true; $$('.lv', us.closest('.vs')).forEach(function (l) { l.classList.toggle('sel', l.contains(r)); }); } return; }
     const ss = e.target.closest('[data-save-stu]'); if (ss) return saveStu(Number(ss.dataset.saveStu));
