@@ -28,7 +28,7 @@
     });
     return out;
   }
-  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = pageOf(id); return pg ? pg.no + '단계' : ''; }
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; if (id === 'rpt') return '보고서·피드백'; const pg = pageOf(id); return pg ? pg.no + '단계' : ''; }
   function fieldLabel(id) { if (!id) return ''; const f = fieldDef(id); return f ? f.label : ''; }
   // 같은 페이지의 다른 조원이 보고 있는 칸에 "누가 보는 중" 표시
   function renderWho() {
@@ -147,7 +147,7 @@
     renderNav();
   }
   function renderNav() {
-    const items = [{ id: 'home', label: '팀 홈' }].concat(S.schema.pages.map(function (p) { return { id: p.id, label: p.no + '. ' + p.title, pct: pagePct(p.id) }; }));
+    const items = [{ id: 'home', label: '팀 홈' }].concat(S.schema.pages.map(function (p) { return { id: p.id, label: p.no + '. ' + p.title, pct: pagePct(p.id) }; })).concat([{ id: 'rpt', label: '📄 보고서 · 피드백' }]);
     const nav = $('#nav'), btns = $$('button', nav);
     // 버튼을 새로 만들지 않고 제자리에서 갱신한다. (클릭하는 순간 버튼이 바뀌면 클릭이 취소되기 때문)
     if (btns.length !== items.length) {
@@ -162,17 +162,19 @@
   }
 
   async function show(id) {
-    if (id !== 'home' && !pageOf(id)) id = 'home';
+    if (id !== 'home' && id !== 'rpt' && !pageOf(id)) id = 'home';
     await flush();
     S.focus = '';
     S.page = id; history.replaceState(null, '', '#' + id);
     renderNav();
     const main = $('#main');
-    main.innerHTML = id === 'home' ? homeHtml() : pageHtml(pageOf(id));
+    main.classList.toggle('wide', id === 'rpt');
+    main.innerHTML = id === 'home' ? homeHtml() : id === 'rpt' ? rptHtml() : pageHtml(pageOf(id));
     window.scrollTo(0, 0);
-    if (id !== 'home') { $$('textarea', main).forEach(updateCount); }
+    if (id !== 'home' && id !== 'rpt') { $$('textarea', main).forEach(updateCount); }
+    if (id === 'rpt') loadRpt();
     renderWho();
-    if (id !== 'home' && pageOf(id) === S.schema.pages[S.schema.pages.length - 1]) { ensureReport(); loadFeedback(); }
+    if (id !== 'home' && id !== 'rpt' && pageOf(id) === S.schema.pages[S.schema.pages.length - 1]) { ensureReport(); loadFeedback(); }
     pollNow();
   }
 
@@ -412,6 +414,29 @@
     inp.value = '';
   });
   function fieldDef(id) { let r = null; S.schema.pages.forEach(function (p) { p.sections.forEach(function (s) { s.fields.forEach(function (f) { if (f.id === id.split('@')[0]) r = f; }); }); }); return r; }
+
+
+  /* ───────── 보고서 · 피드백 나란히 보기 ───────── */
+  function rptHtml() {
+    return '<div class="card no-print"><div class="row"><h2 class="grow" style="margin:0">보고서 · 피드백 함께 보기</h2><span id="rptBar" class="row"></span></div>' +
+      '<p class="small muted">왼쪽은 우리 조 보고서, 오른쪽은 선생님 피드백이에요. 두 쪽은 따로 스크롤돼서 비교하며 읽을 수 있어요. 보고서를 고쳤다면 이 탭을 다시 열면 반영돼요.</p></div>' +
+      '<div class="split"><div class="pane report" id="rptL"><p class="muted">보고서를 불러오는 중…</p></div><div class="pane" id="rptR"><p class="muted">피드백을 불러오는 중…</p></div></div>';
+  }
+  async function loadRpt() {
+    if (!S.st.team.reportId && !S.viewOnly) await ensureReport();
+    const L = $('#rptL'), R = $('#rptR'); if (!L || S.page !== 'rpt') return;
+    const id = S.st.team.reportId;
+    if (!id) { L.innerHTML = '<div class="banner warn">보고서 링크가 아직 없어요. 학생이 6단계를 한 번 열면 만들어져요.</div>'; R.innerHTML = ''; return; }
+    const link = PJ.reportLink(id);
+    $('#rptBar').innerHTML = '<a class="btn sm ghost" href="' + esc(link) + '" target="_blank" rel="noopener">새 창에서 보기</a><a class="btn sm ghost" href="' + esc(link + '&print=1') + '" target="_blank" rel="noopener">PDF로 저장하기</a><button class="btn sm ghost" data-copy="' + esc(link) + '">링크 복사</button>';
+    try {
+      const res = await Promise.all([api('getReport', { id: id }), api('getFeedback', { tid: VIEW || undefined }, S.token)]);
+      if (S.page !== 'rpt' || !$('#rptL')) return;
+      const rep = res[0], fb = res[1].feedback; S.fb = fb;
+      L.innerHTML = (rep.status !== '제출완료' ? '<div class="banner warn small"><b>작성 중인 보고서</b>예요. 최종 제출 전이라 내용이 바뀔 수 있어요.</div>' : '') + PJ.reportBodyHtml(rep);
+      R.innerHTML = fb ? PJ.feedbackHtml(fb) : '<div class="banner info"><b>선생님 피드백이 아직 공개되지 않았어요.</b><br><span class="small">공개되면 이 자리에 나타나요. 먼저 왼쪽 보고서를 읽어 보면서 고칠 곳이 없는지 점검해 보세요.</span></div>';
+    } catch (e) { if (!fatal(e)) L.innerHTML = '<div class="banner bad">' + esc(e.message) + '</div>'; }
+  }
 
   /* ───────── 제출 ───────── */
   function leftText(ms) {

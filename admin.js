@@ -67,7 +67,7 @@
   }
 
   /* ───────── 진행 현황 ───────── */
-  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = (A.ov.pages || []).filter(function (p) { return p.id === id; })[0]; return pg ? pg.no + '단계 ' + pg.title : id; }
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; if (id === 'rpt') return '보고서·피드백'; const pg = (A.ov.pages || []).filter(function (p) { return p.id === id; })[0]; return pg ? pg.no + '단계 ' + pg.title : id; }
   function fieldLabel(id) { if (!id) return ''; let r = ''; ((A.schema || {}).pages || []).forEach(function (p) { p.sections.forEach(function (s) { s.fields.forEach(function (f) { if (f.id === String(id).split('@')[0]) r = f.label; }); }); }); return r ? '보는 칸: ' + r : ''; }
   function overviewHtml() {
     const o = A.ov, classes = Array.from(new Set(o.teams.map(function (t) { return t.cls; })));

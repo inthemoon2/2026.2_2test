@@ -177,6 +177,44 @@
     return h + '</section>';
   };
 
+  /* 보고서 본문(제목·조 정보·단계별 내용). 보고서 페이지와 학생 앱의 '보고서·피드백' 탭이 같이 쓴다 */
+  C.reportBodyHtml = function (r) {
+    const esc = C.esc, PJ = C;
+  function item(it) {
+    let v;
+    if (it.type === 'member') {
+      v = it.values.map(function (m) { return '<p><b>' + esc(m.name) + '</b><br>' + (m.val ? '<span class="val">' + esc(m.val) + '</span>' : '<span class="empty">작성하지 않음</span>') + '</p>'; }).join('');
+      return '<div class="item"><div class="lab">' + esc(it.label) + '</div>' + v + '</div>';
+    }
+    if (it.type === 'file') {
+      const f = it.file;
+      if (!f) v = '<span class="empty">올리지 않음</span>';
+      else if (it.kind === 'img') v = '<a href="' + esc(f.view) + '" target="_blank" rel="noopener"><img src="' + esc(f.thumb) + '" alt="' + esc(f.name) + '"></a><div class="small muted">' + esc(f.name) + '</div>';
+      else {
+        v = '<a href="' + esc(f.view) + '" target="_blank" rel="noopener">' + esc(f.name) + '</a> <span class="muted small">(' + PJ.fmtBytes(f.size) + ')</span>';
+        const m = f.meta;
+        if (it.kind === 'csv' && m && m.cols) {
+          v += '<div class="small">행 ' + m.rows + ' × 열 ' + m.cols + ' · 열 이름: ' + esc((m.columns || []).join(', ')) + '</div>';
+          const miss = Object.keys(m.missing || {}).filter(function (k) { return m.missing[k] > 0; });
+          v += '<div class="small">결측치: ' + (miss.length ? esc(miss.map(function (k) { return k + ' ' + m.missing[k] + '개'; }).join(', ')) : '없음') + '</div>';
+        }
+      }
+      return '<div class="item"><div class="lab">' + esc(it.label) + '</div><div>' + v + '</div></div>';
+    }
+    v = it.val ? '<div class="val">' + (/^https?:\/\/\S+$/.test(it.val) ? '<a href="' + esc(it.val) + '" target="_blank" rel="noopener">' + esc(it.val) + '</a>' : esc(it.val)) + '</div>' : '<div class="empty">작성하지 않음</div>';
+    return '<div class="item"><div class="lab">' + esc(it.label) + '</div>' + v + '</div>';
+  }
+
+
+    return '<h1>사회문제 해결 기계학습 프로젝트 보고서</h1>' +
+      '<table class="tbl"><tbody><tr><th>반 / 조</th><td>' + esc(r.cls) + '반 ' + esc(r.no) + '조</td><th>진로 분야</th><td>' + esc(r.field) + '</td></tr>' +
+      '<tr><th>조원(역할)</th><td colspan="3">' + r.members.map(function (m) { return esc(m.name) + (m.roles.length ? ' (' + esc(m.roles.join(' · ')) + ')' : ''); }).join('<br>') + '</td></tr>' +
+      '<tr><th>제출 일시</th><td colspan="3">' + esc(r.submitAt || '—') + '</td></tr></tbody></table>' +
+      r.pages.map(function (pg) {
+        return '<section class="sec pg"><h2>' + pg.no + '. ' + esc(pg.title) + '</h2>' + pg.sections.filter(function (sc) { return !/^6-1/.test(sc.title); }).map(function (sc) { return '<h3>' + esc(sc.title) + '</h3>' + sc.items.map(item).join(''); }).join('') + '</section>';
+      }).join('');
+  };
+
   C.reportLink = function (id) { return new URL('report.html?id=' + encodeURIComponent(id), location.href).href; };
   C.store = {
     get: function (k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
