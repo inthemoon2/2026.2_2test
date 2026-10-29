@@ -126,6 +126,95 @@
   C.fmtBytes = function (n) { return n > 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; };
   C.countChars = function (s) { return String(s || '').replace(/\s+/g, '').length; };
   C.debounce = function (fn, ms) { let t; return function () { const a = arguments, self = this; clearTimeout(t); t = setTimeout(function () { fn.apply(self, a); }, ms); }; };
+
+  /* 교사 피드백 화면 (학생 앱·보고서·관리자 미리보기가 같이 쓴다) */
+  C.feedbackHtml = function (fb, o) {
+    o = o || {};
+    const E = C.esc;
+    const stars = function (n) { return n ? '<span class="stars" aria-label="5단계 중 ' + n + '단계">' + '★'.repeat(n) + '<i>' + '☆'.repeat(5 - n) + '</i></span>' : '<span class="muted">기록 없음</span>'; };
+    const pre = function (t) { return '<p class="pre">' + E(t) + '</p>'; };
+    const badge = function (st) { return st === 'ok' ? '<span class="badge ok">✓ 충족</span>' : st === 'part' ? '<span class="badge warn">△ 보완 필요</span>' : st === 'no' ? '<span class="badge bad">✗ 미흡</span>' : '<span class="badge">점검 전</span>'; };
+    let h = '<section class="fb"><h2>교사 피드백</h2>';
+    if (o.admin) h += '<div class="banner info no-print small">관리자 미리보기입니다. ' + (fb.published ? '학생에게 <b>공개 중</b>이에요.' : '아직 <b>비공개</b>예요. 공개하면 학생 화면과 보고서 맨 끝에 보여요.') + '</div>';
+    h += '<div class="fb-card fb-main"><h3>① 총평</h3>' + pre(fb.overall) + '</div>';
+
+    // ② 참여도
+    const pt = fb.participation || { sessions: [] };
+    h += '<div class="fb-card"><h3>② 참여도</h3>' +
+      (pt.avg === null ? '<p class="muted">아직 기록된 참여도가 없어요.</p>' :
+        '<p><b>전체 평균 ' + pt.avg + ' / 5 · ' + E(pt.label) + '</b></p>' + pt.sessions.map(function (s) {
+          return '<div class="fb-bar"><span class="fb-lab">' + E(s.title) + '</span><div class="bar"><i style="width:' + (s.avg ? Math.round(s.avg / 5 * 100) : 0) + '%"></i></div><span class="fb-val">' + (s.avg === null ? '–' : s.avg) + '</span></div>';
+        }).join('') + '<p class="small muted">조원의 5단계 참여도(1 참여 미흡 ~ 5 매우 적극적)를 차시마다 평균한 값이에요.</p>');
+    if (fb.individuals && fb.individuals.length) {
+      h += '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th>' + pt.sessions.map(function (s) { return '<th>' + E(s.title) + '</th>'; }).join('') + '<th>평균</th></tr></thead><tbody>' +
+        fb.individuals.map(function (m) { return '<tr><td><b>' + E(m.name) + '</b><div class="small muted">' + E((m.roles || []).join(' · ')) + '</div></td>' + pt.sessions.map(function (s) { return '<td>' + stars(m.levels[s.no]) + '</td>'; }).join('') + '<td>' + (m.avg === null ? '–' : m.avg) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      const praise = fb.individuals.filter(function (m) { return m.notes.length || m.asks.length; });
+      if (praise.length) {
+        h += '<h4>수업 중 눈에 띈 모습</h4>' + praise.map(function (m) {
+          return '<div class="fb-person"><b>' + E(m.name) + '</b>' +
+            (m.notes.length ? '<div class="small"><span class="badge ok">잘한 점</span> ' + m.notes.map(function (n) { return E(n.no + '차시: ' + n.text); }).join(' / ') + '</div>' : '') +
+            (m.asks.length ? '<div class="small"><span class="badge brand">질문·고민</span> ' + m.asks.map(function (n) { return E(n.no + '차시: ' + n.text); }).join(' / ') + '</div>' : '') + '</div>';
+        }).join('');
+      }
+    }
+    h += '</div>';
+
+    // ③ 중간 점검
+    h += '<div class="fb-card"><h3>③ 중간 점검 기록</h3>' + ((fb.checks || []).length ? fb.checks.map(function (c) {
+      return '<h4>' + E(c.title) + '</h4><ul class="fb-list">' + c.items.map(function (i) { return '<li>' + badge(i.status) + ' ' + E(i.label) + '</li>'; }).join('') + '</ul>' + (c.memo ? '<p class="small"><b>교사 메모</b> ' + E(c.memo) + '</p>' : '');
+    }).join('') : '<p class="muted">기록된 점검이 없어요.</p>') + '</div>';
+
+    // ④ 프로젝트 내용
+    h += '<div class="fb-card"><h3>④ 프로젝트 내용 평가</h3>' + pre(fb.project.comment) + '<div class="fb-grid">' + fb.project.elems.map(function (e) {
+      const pct = e.total ? Math.round(e.pass / e.total * 100) : 0;
+      return '<div class="fb-el"><h4>' + E(e.name) + '</h4><div class="fb-bar"><div class="bar' + (pct === 100 ? ' full' : '') + '"><i style="width:' + pct + '%"></i></div><span class="fb-val">' + e.pass + '/' + e.total + '</span></div>' +
+        (e.good.length ? '<div class="small"><b class="ok-t">잘한 점</b><ul class="fb-list">' + e.good.map(function (x) { return '<li>' + E(x) + '</li>'; }).join('') + '</ul></div>' : '') +
+        (e.todo.length ? '<div class="small"><b class="warn-t">보완하면 좋은 점</b><ul class="fb-list">' + e.todo.map(function (x) { return '<li>' + E(x) + '</li>'; }).join('') + '</ul></div>' : '<div class="small ok-t"><b>모든 점검 기준을 충족했어요.</b></div>') +
+        (o.admin && e.flags && e.flags.length ? '<div class="small warn-t">⚠ ' + e.flags.map(E).join('<br>⚠ ') + '</div>' : '') + '</div>';
+    }).join('') + '</div><p class="small muted">점검 기준은 보고서에 필요한 내용이 갖춰졌는지 살피는 항목이에요. 내용의 정확성과 깊이는 선생님이 따로 평가합니다.</p></div>';
+
+    if (fb.note) h += '<div class="fb-card fb-note"><h3>⑤ 선생님 한마디</h3>' + pre(fb.note) + '</div>';
+    return h + '</section>';
+  };
+
+  /* 보고서 본문(제목·조 정보·단계별 내용). 보고서 페이지와 학생 앱의 '보고서·피드백' 탭이 같이 쓴다 */
+  C.reportBodyHtml = function (r) {
+    const esc = C.esc, PJ = C;
+  function item(it) {
+    let v;
+    if (it.type === 'member') {
+      v = it.values.map(function (m) { return '<p><b>' + esc(m.name) + '</b><br>' + (m.val ? '<span class="val">' + esc(m.val) + '</span>' : '<span class="empty">작성하지 않음</span>') + '</p>'; }).join('');
+      return '<div class="item"><div class="lab">' + esc(it.label) + '</div>' + v + '</div>';
+    }
+    if (it.type === 'file') {
+      const f = it.file;
+      if (!f) v = '<span class="empty">올리지 않음</span>';
+      else if (it.kind === 'img') v = '<a href="' + esc(f.view) + '" target="_blank" rel="noopener"><img src="' + esc(f.thumb) + '" alt="' + esc(f.name) + '"></a><div class="small muted">' + esc(f.name) + '</div>';
+      else {
+        v = '<a href="' + esc(f.view) + '" target="_blank" rel="noopener">' + esc(f.name) + '</a> <span class="muted small">(' + PJ.fmtBytes(f.size) + ')</span>';
+        const m = f.meta;
+        if (it.kind === 'csv' && m && m.cols) {
+          v += '<div class="small">행 ' + m.rows + ' × 열 ' + m.cols + ' · 열 이름: ' + esc((m.columns || []).join(', ')) + '</div>';
+          const miss = Object.keys(m.missing || {}).filter(function (k) { return m.missing[k] > 0; });
+          v += '<div class="small">결측치: ' + (miss.length ? esc(miss.map(function (k) { return k + ' ' + m.missing[k] + '개'; }).join(', ')) : '없음') + '</div>';
+        }
+      }
+      return '<div class="item"><div class="lab">' + esc(it.label) + '</div><div>' + v + '</div></div>';
+    }
+    v = it.val ? '<div class="val">' + (/^https?:\/\/\S+$/.test(it.val) ? '<a href="' + esc(it.val) + '" target="_blank" rel="noopener">' + esc(it.val) + '</a>' : esc(it.val)) + '</div>' : '<div class="empty">작성하지 않음</div>';
+    return '<div class="item"><div class="lab">' + esc(it.label) + '</div>' + v + '</div>';
+  }
+
+
+    return '<h1>사회문제 해결 기계학습 프로젝트 보고서</h1>' +
+      '<table class="tbl"><tbody><tr><th>반 / 조</th><td>' + esc(r.cls) + '반 ' + esc(r.no) + '조</td><th>진로 분야</th><td>' + esc(r.field) + '</td></tr>' +
+      '<tr><th>조원(역할)</th><td colspan="3">' + r.members.map(function (m) { return esc(m.name) + (m.roles.length ? ' (' + esc(m.roles.join(' · ')) + ')' : ''); }).join('<br>') + '</td></tr>' +
+      '<tr><th>제출 일시</th><td colspan="3">' + esc(r.submitAt || '—') + '</td></tr></tbody></table>' +
+      r.pages.filter(function (pg) { return pg.id !== 'p6'; }).map(function (pg) {
+        return '<section class="sec pg"><h2>' + pg.no + '. ' + esc(pg.title) + '</h2>' + pg.sections.map(function (sc) { return '<h3>' + esc(sc.title) + '</h3>' + sc.items.map(item).join(''); }).join('') + '</section>';
+      }).join('');
+  };
+
   C.reportLink = function (id) { return new URL('report.html?id=' + encodeURIComponent(id), location.href).href; };
   C.store = {
     get: function (k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },

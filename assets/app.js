@@ -28,7 +28,7 @@
     });
     return out;
   }
-  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = pageOf(id); return pg ? pg.no + '단계' : ''; }
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; if (id === 'rpt') return '보고서·피드백'; const pg = pageOf(id); return pg ? pg.no + '단계' : ''; }
   function fieldLabel(id) { if (!id) return ''; const f = fieldDef(id); return f ? f.label : ''; }
   // 같은 페이지의 다른 조원이 보고 있는 칸에 "누가 보는 중" 표시
   function renderWho() {
@@ -147,7 +147,7 @@
     renderNav();
   }
   function renderNav() {
-    const items = [{ id: 'home', label: '팀 홈' }].concat(S.schema.pages.map(function (p) { return { id: p.id, label: p.no + '. ' + p.title, pct: pagePct(p.id) }; }));
+    const items = [{ id: 'home', label: '팀 홈' }].concat(S.schema.pages.map(function (p) { return { id: p.id, label: p.no + '. ' + p.title, pct: pagePct(p.id) }; })).concat([{ id: 'rpt', label: '📄 보고서 · 피드백' }]);
     const nav = $('#nav'), btns = $$('button', nav);
     // 버튼을 새로 만들지 않고 제자리에서 갱신한다. (클릭하는 순간 버튼이 바뀌면 클릭이 취소되기 때문)
     if (btns.length !== items.length) {
@@ -162,16 +162,19 @@
   }
 
   async function show(id) {
-    if (id !== 'home' && !pageOf(id)) id = 'home';
+    if (id !== 'home' && id !== 'rpt' && !pageOf(id)) id = 'home';
     await flush();
     S.focus = '';
     S.page = id; history.replaceState(null, '', '#' + id);
     renderNav();
     const main = $('#main');
-    main.innerHTML = id === 'home' ? homeHtml() : pageHtml(pageOf(id));
+    main.classList.toggle('wide', id === 'rpt');
+    main.innerHTML = id === 'home' ? homeHtml() : id === 'rpt' ? rptHtml() : pageHtml(pageOf(id));
     window.scrollTo(0, 0);
-    if (id !== 'home') { $$('textarea', main).forEach(updateCount); }
+    if (id !== 'home' && id !== 'rpt') { $$('textarea', main).forEach(updateCount); }
+    if (id === 'rpt') loadRpt();
     renderWho();
+    if (id !== 'home' && id !== 'rpt' && pageOf(id) === S.schema.pages[S.schema.pages.length - 1]) { ensureReport(); loadFeedback(); }
     pollNow();
   }
 
@@ -196,6 +199,7 @@
       '<div class="card"><h2>' + t.cls + '반 ' + t.no + '조 · ' + esc(t.field) + '</h2>' +
       '<p>이 공간은 <b>우리 조 모두가 함께</b> 쓰는 하나의 프로젝트예요. 글을 쓰면 몇 초 안에 <b>자동으로 저장</b>되고, 조원이 고친 내용도 곧 화면에 나타납니다. 같은 칸을 동시에 고치면 충돌 안내가 뜨니 먼저 상의해요.</p>' +
       '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>역할</th></tr></thead><tbody>' + roleRows + '</tbody></table></div></div>' +
+      schedHtml() +
       '<div class="card"><h2>진행 단계</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>단계</th><th>주로 맡는 역할</th><th>작성 진행률</th></tr></thead><tbody>' + pages + '</tbody></table></div>' +
       '<p class="small muted">역할은 "주로 맡는" 기준일 뿐, 모든 조원이 어느 페이지든 함께 쓰고 고칠 수 있어요. (※ 마지막 페이지의 "나의 기여" 칸은 본인만 쓸 수 있어요.)</p></div>' +
       '<div class="card"><h2>평가 기준 미리 보기</h2><p class="small muted">아래 기준에 따라 선생님이 평가합니다. 각 단계를 쓸 때 기준을 떠올려 보세요.</p>' + rub +
@@ -220,7 +224,7 @@
     pg.sections.forEach(function (sc) {
       h += '<div class="card"><h3>' + esc(sc.title) + '</h3>' + sc.fields.map(fieldHtml).join('') + '</div>';
     });
-    if (pg.id === S.schema.pages[S.schema.pages.length - 1].id) h += submitHtml();
+    if (pg.id === S.schema.pages[S.schema.pages.length - 1].id) h += tailHtml();
     h += '<div class="row no-print" style="justify-content:space-between">' + navBtn(pg, -1) + navBtn(pg, 1) + '</div>';
     return h;
   }
@@ -411,15 +415,84 @@
   });
   function fieldDef(id) { let r = null; S.schema.pages.forEach(function (p) { p.sections.forEach(function (s) { s.fields.forEach(function (f) { if (f.id === id.split('@')[0]) r = f; }); }); }); return r; }
 
+
+  /* ───────── 보고서 · 피드백 나란히 보기 ───────── */
+  function rptHtml() {
+    return '<div class="card no-print"><div class="row"><h2 class="grow" style="margin:0">보고서 · 피드백 함께 보기</h2><span id="rptBar" class="row"></span></div>' +
+      '<p class="small muted">왼쪽은 우리 조 보고서, 오른쪽은 선생님 피드백이에요. 두 쪽은 따로 스크롤돼서 비교하며 읽을 수 있어요. 보고서를 고쳤다면 이 탭을 다시 열면 반영돼요.</p></div>' +
+      '<div class="split"><div class="pane report" id="rptL"><p class="muted">보고서를 불러오는 중…</p></div><div class="pane" id="rptR"><p class="muted">피드백을 불러오는 중…</p></div></div>';
+  }
+  async function loadRpt() {
+    if (!S.st.team.reportId && !S.viewOnly) await ensureReport();
+    const L = $('#rptL'), R = $('#rptR'); if (!L || S.page !== 'rpt') return;
+    const id = S.st.team.reportId;
+    if (!id) { L.innerHTML = '<div class="banner warn">보고서 링크가 아직 없어요. 학생이 6단계를 한 번 열면 만들어져요.</div>'; R.innerHTML = ''; return; }
+    const link = PJ.reportLink(id);
+    $('#rptBar').innerHTML = '<a class="btn sm ghost" href="' + esc(link) + '" target="_blank" rel="noopener">새 창에서 보기</a><a class="btn sm ghost" href="' + esc(link + '&print=1') + '" target="_blank" rel="noopener">PDF로 저장하기</a><button class="btn sm ghost" data-copy="' + esc(link) + '">링크 복사</button>';
+    try {
+      const res = await Promise.all([api('getReport', { id: id }), api('getFeedback', { tid: VIEW || undefined }, S.token)]);
+      if (S.page !== 'rpt' || !$('#rptL')) return;
+      const rep = res[0], fb = res[1].feedback; S.fb = fb;
+      L.innerHTML = (rep.status !== '제출완료' ? '<div class="banner warn small"><b>작성 중인 보고서</b>예요. 최종 제출 전이라 내용이 바뀔 수 있어요.</div>' : '') + PJ.reportBodyHtml(rep);
+      R.innerHTML = fb ? PJ.feedbackHtml(fb) : '<div class="banner info"><b>선생님 피드백이 아직 공개되지 않았어요.</b><br><span class="small">공개되면 이 자리에 나타나요. 먼저 왼쪽 보고서를 읽어 보면서 고칠 곳이 없는지 점검해 보세요.</span></div>';
+    } catch (e) { if (!fatal(e)) L.innerHTML = '<div class="banner bad">' + esc(e.message) + '</div>'; }
+  }
+
   /* ───────── 제출 ───────── */
+  function leftText(ms) {
+    const d = ms - Date.now(); if (d <= 0) return '마감 시각이 지났어요';
+    const h = Math.floor(d / 3600000), m = Math.floor(d % 3600000 / 60000);
+    return h >= 24 ? Math.floor(h / 24) + '일 ' + (h % 24) + '시간 남았어요' : h + '시간 ' + m + '분 남았어요';
+  }
+  function deadlineHtml() {
+    const d = S.st.deadline; if (!d) return '';
+    const passed = Date.now() > d.ms;
+    return '<div class="banner ' + (passed ? 'bad' : 'info') + '"><b>최종 제출 마감: ' + esc(d.at) + '</b> · <span data-left="' + d.ms + '">' + esc(leftText(d.ms)) + '</span><br><span class="small">마감 안에 <b>팀장이 최종 제출</b>을 하고, 조원 모두 6-2 "나의 기여"에 자기가 한 일을 적어 주세요.' + (d.lock ? ' 마감 뒤에는 수정할 수 없어요.' : '') + '</span></div>';
+  }
+  function schedHtml() {
+    return deadlineHtml() + '<div class="card"><h2>수행평가 진행 안내</h2><div class="tbl-wrap"><table class="tbl"><tbody>' +
+      '<tr><th>1차시</th><td>팀원이 <b>1. 문제 정의</b>를 나누어 써요. 데이터 엔지니어는 <b>2. 데이터 수집·전처리</b>를 시작해요.</td></tr>' +
+      '<tr><th>2차시</th><td>1번 정리를 마무리해요. 데이터 엔지니어는 2번을 쓰고 <b>코랩 파일 링크와 필요한 파일</b>을 올려요(2-4). <b>팀장</b>이 그 코랩을 직접 실행해 오류를 점검하고, 고친 파일을 모델 개발자에게 전달해요. 모델 개발자는 고친 파일에 이어서 모델 개발을 시작해요.</td></tr>' +
+      '<tr><th>3차시</th><td>모델 개발자가 <b>3. 모델 개발·평가</b>를 쓰고, <b>팀장</b>이 그 코랩을 실행해 오류를 점검해요(3-3). 도메인 분석가와 AI 윤리·소통 담당은 고친 파일을 받아 <b>4번·5번</b>을 써요.</td></tr>' +
+      '<tr><th>최종 제출</th><td>마지막 수행평가 뒤 <b>' + ((S.st.deadline && S.st.deadline.hours) || 48) + '시간 안에</b> 팀장이 제출해요. 조원은 그 안에 6-2 "나의 기여"를 써요.</td></tr></tbody></table></div>' +
+      '<p class="small muted">선생님이 각 차시마다 참여도와, 어떤 질문과 고민을 했는지를 기록해요. 궁금한 점은 주저하지 말고 질문해 보세요.</p></div>';
+  }
+  function reportCardHtml() {
+    const t = S.st.team, id = t.reportId;
+    if (!id) return '<div class="card" id="reportCard"><h2>우리 조 보고서 · PDF · 링크</h2><p class="muted">보고서 링크를 만드는 중…</p></div>';
+    const link = PJ.reportLink(id);
+    return '<div class="card" id="reportCard"><h2>우리 조 보고서 · PDF · 링크</h2>' +
+      '<p>지금까지 쓴 내용이 하나의 보고서로 정리돼요. 제출 전에도 열어 볼 수 있고, <b>고쳐 쓰면 같은 링크에 바로 반영</b>돼요. 이 링크를 따로 저장해 두면 나중에도 우리 조 보고서(와 교사 피드백)를 다시 볼 수 있어요.</p>' +
+      '<p><label class="f" for="rlink">보고서 링크</label><input id="rlink" type="text" readonly value="' + esc(link) + '" onclick="this.select()"></p>' +
+      '<div class="row"><a class="btn" href="' + esc(link) + '" target="_blank" rel="noopener">보고서 열기</a>' +
+      '<a class="btn ghost" href="' + esc(link + '&print=1') + '" target="_blank" rel="noopener">PDF로 저장하기</a>' +
+      '<button class="btn ghost" data-copy="' + esc(link) + '">링크 복사</button></div>' +
+      '<p class="small muted">"PDF로 저장하기"를 누르면 인쇄 창이 열려요. 대상(프린터)을 <b>PDF로 저장</b>으로 고르고 저장하세요. 제출 전에는 보고서 위쪽에 "작성 중"이라고 표시돼요.</p></div>';
+  }
   function submitHtml() {
     if (S.st.locked || S.viewOnly) return '';
-    const miss = missingList();
-    return '<div class="card" id="submitCard"><h2>교사에게 제출하기</h2>' +
-      (miss.length ? '<div class="banner warn"><b>아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요.</b><ul class="small">' + miss.slice(0, 12).map(function (m) { return '<li><a href="#' + m.page + '" data-go="' + m.page + '" onclick="return false">' + esc(pageOf(m.page).no + '단계') + '</a> ' + esc(m.label) + '</li>'; }).join('') + (miss.length > 12 ? '<li>…외 ' + (miss.length - 12) + '개</li>' : '') + '</ul></div>' : '<div class="banner ok">필수 항목을 모두 작성했어요. 제출 전에 한 번 더 읽어 보세요.</div>') +
-      '<p>제출하면 <b>더 이상 수정할 수 없고</b>, 우리 조의 보고서 페이지가 만들어져요. 조원 모두 확인했나요?</p>' +
-      '<p><button class="btn" id="submitBtn">교사에게 제출하기</button></p></div>';
+    const miss = missingList(), rule = S.st.submitRule || { canSubmit: true, leaders: [] };
+    const head = '<div class="card" id="submitCard"><h2>교사에게 최종 제출하기</h2>';
+    if (!rule.canSubmit) return head + '<div class="banner info"><b>최종 제출은 팀장(' + esc(rule.leaders.join(', ')) + ')이 해요.</b><br><span class="small">나는 6-2 "나의 기여"에 내가 한 일을 쓰면 돼요. 마감 전에 팀장이 제출하니, 다 썼다면 팀장에게 알려 주세요.</span></div>' +
+      (miss.length ? '<p class="small">아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요. 팀장과 함께 확인해 보세요.</p>' : '') + '</div>';
+    return head +
+      (miss.length ? '<div class="banner warn"><b>아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요.</b><ul class="small">' + miss.slice(0, 12).map(function (m) { return '<li><a href="#' + m.page + '" data-go="' + m.page + '" onclick="return false">' + esc(pageOf(m.page).no + '단계') + '</a> ' + esc(m.label) + '</li>'; }).join('') + (miss.length > 12 ? '<li>…외 ' + (miss.length - 12) + '개</li>' : '') + '</ul></div>' : '<div class="banner ok">필수 항목을 모두 채웠어요.</div>') +
+      '<p>제출하면 <b>더 이상 수정할 수 없어요.</b> 조원 모두가 6-2 "나의 기여"를 썼는지 확인했나요?</p>' +
+      '<p><button class="btn" id="submitBtn">교사에게 최종 제출하기</button></p></div>';
   }
+  function tailHtml() {
+    return reportCardHtml() + deadlineHtml() + submitHtml() + '<div id="fbBox">' + (S.fb ? PJ.feedbackHtml(S.fb) : '') + '</div>';
+  }
+  async function ensureReport() {
+    const t = S.st.team; if (t.reportId || S.viewOnly) { if (!t.reportId) { const c = $('#reportCard'); if (c) c.remove(); } return; }
+    try { const r = await api('getReportLink', {}, S.token); t.reportId = r.reportId; t.reportUrl = r.reportUrl; const c = $('#reportCard'); if (c) c.outerHTML = reportCardHtml(); }
+    catch (e) { if (!fatal(e)) { const c = $('#reportCard'); if (c) c.insertAdjacentHTML('beforeend', '<p class="small" style="color:var(--bad)">보고서 링크를 만들지 못했어요: ' + esc(e.message) + '</p>'); } }
+  }
+  async function loadFeedback() {
+    try { const r = await api('getFeedback', { tid: VIEW || undefined }, S.token); S.fb = r.feedback; const b = $('#fbBox'); if (b) b.innerHTML = S.fb ? PJ.feedbackHtml(S.fb) : ''; }
+    catch (e) { fatal(e); }
+  }
+  setInterval(function () { $$('[data-left]').forEach(function (e) { e.textContent = leftText(Number(e.dataset.left)); }); }, 30000);
   async function doSubmit() {
     const miss = missingList();
     const msg = (miss.length ? '필수 항목 ' + miss.length + '개가 비어 있어요.\n그래도 제출할까요?\n\n' : '') + '제출하면 수정할 수 없어요. 정말 제출할까요?';
@@ -433,7 +506,7 @@
       renderTop(); await show(S.page);
       toast('제출했어요! 보고서가 만들어졌어요.', 'ok');
       return r;
-    } catch (e) { if (!fatal(e)) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '교사에게 제출하기'; } }
+    } catch (e) { if (!fatal(e)) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '교사에게 최종 제출하기'; } }
   }
 
   /* ───────── 실시간 반영(8초마다 확인) ───────── */
@@ -448,7 +521,7 @@
       S.st.presence = r.presence;
       if (r.changed) {
         const wasLocked = S.st.locked;
-        S.st.rev = r.rev; S.st.content = r.content; S.st.files = r.files; S.st.locked = r.locked; S.st.team = r.team; S.st.members = r.members; S.st.progress = r.progress;
+        S.st.rev = r.rev; S.st.content = r.content; S.st.files = r.files; S.st.locked = r.locked; S.st.team = r.team; S.st.members = r.members; S.st.progress = r.progress; S.st.deadline = r.deadline; S.st.submitRule = r.submitRule;
         if (wasLocked !== r.locked) { renderTop(); await show(S.page); }
         else applyRemote();
       }
