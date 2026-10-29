@@ -28,6 +28,17 @@
     });
     return out;
   }
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = pageOf(id); return pg ? pg.no + '단계' : ''; }
+  function fieldLabel(id) { if (!id) return ''; const f = fieldDef(id); return f ? f.label : ''; }
+  // 같은 페이지의 다른 조원이 보고 있는 칸에 "누가 보는 중" 표시
+  function renderWho() {
+    $$('[data-who]').forEach(function (e) { e.textContent = ''; });
+    (S.st.presence || []).forEach(function (p) {
+      if (p.name === S.me || !p.field || p.page !== S.page) return;
+      const e = $('[data-who="' + p.field + '"]'); if (!e) return;
+      e.textContent = (e.textContent ? e.textContent + ', ' : '✎ ') + p.name + (e.textContent ? '' : ' 님이 보는 중');
+    });
+  }
   function pagePct(pgId) {
     const pg = pageOf(pgId); let t = 0, d = 0;
     pg.sections.forEach(function (sc) {
@@ -88,7 +99,7 @@
     app.innerHTML = '<div class="wrap"><p class="muted">프로젝트를 불러오는 중…</p></div>';
     try {
       if (!S.schema) S.schema = await api('schema');
-      S.st = await api('loadProject', { page: S.page, tid: VIEW || undefined }, S.token);
+      S.st = await api('loadProject', { page: S.page, field: S.focus || '', tid: VIEW || undefined }, S.token);
       S.me = S.st.me.name;
     } catch (e) { if (fatal(e)) return; app.innerHTML = '<div class="wrap"><div class="banner bad">' + esc(e.message) + '</div><p><button class="btn" onclick="location.reload()">다시 시도</button></p></div>'; return; }
     renderShell();
@@ -105,22 +116,34 @@
       '<button class="btn sm" id="lo">' + (S.viewOnly ? '닫기' : '나가기') + '</button></div></header>' +
       '<nav class="nav" id="nav" aria-label="단계"></nav>' +
       '<main class="wrap" id="main"></main>';
-    $('#lo').addEventListener('click', async function () { if (S.viewOnly) { if (!window.close()) location.href = 'admin.html'; return; } await saveNow(); logout(); });
+    $('#lo').addEventListener('click', async function () { if (S.viewOnly) { if (!window.close()) location.href = 'admin.html'; return; } setSaveState('저장 중…');
+      const left = await flush();
+      if (left.length && !window.confirm('아직 저장되지 않은 내용이 ' + left.length + '칸 있어요.\n(충돌이 해결되지 않았거나 인터넷 연결 문제일 수 있어요)\n그래도 나갈까요? 나가면 이 내용은 사라져요.')) return;
+      logout(); });
     $('#nav').addEventListener('click', function (e) { const b = e.target.closest('button[data-p]'); if (b) show(b.dataset.p); });
     const main = $('#main');
     main.addEventListener('input', onInput);
     main.addEventListener('change', onInput);
     main.addEventListener('focusout', function (e) { if (e.target.closest('[data-fid]')) saveNow(); });
+    main.addEventListener('focusin', function (e) { const el = e.target.closest('[data-fid]'); const id = el ? el.dataset.fid : ''; if (id !== S.focus) { S.focus = id; clearTimeout(S.focusTimer); S.focusTimer = setTimeout(poll, 1200); } });
     main.addEventListener('click', onClick);
     window.addEventListener('beforeunload', function (e) { if (Object.keys(S.dirty).length) { e.preventDefault(); e.returnValue = ''; } });
-    document.addEventListener('visibilitychange', function () { if (!document.hidden && S.st) poll(); });
+    document.addEventListener('visibilitychange', function () { if (document.hidden) saveNow(); else if (S.st) poll(); });
+    // 탭을 닫는 순간에도 마지막 입력을 보내 본다(브라우저가 허용하는 범위에서 최선). 보통은 자동 저장이 먼저 끝나 있어요.
+    window.addEventListener('pagehide', function () {
+      if (!S.token || !S.st || locked()) return;
+      const ids = Object.keys(S.dirty).filter(function (id) { return !(id in S.conflicts); }); if (!ids.length) return;
+      const fields = {}; ids.forEach(function (id) { fields[id] = { val: S.dirty[id], baseV: S.base[id] || 0 }; });
+      try { fetch(window.APP_CONFIG.API_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'saveFields', payload: { page: S.page, fields: fields }, token: S.token }) }); } catch (e) { /* 무시 */ }
+    });
     renderTop();
   }
 
   function renderTop() {
     const t = S.st.team;
     $('#ttl').textContent = (S.viewOnly ? '[교사 보기] ' : '') + t.cls + '반 ' + t.no + '조 · ' + t.field + (S.st.locked ? ' (제출 완료)' : '');
-    $('#pres').innerHTML = (S.st.presence || []).length ? '<span class="dot"></span>접속 중: ' + (S.st.presence || []).map(function (p) { return esc(p.name) + (p.name === S.me ? '(나)' : ''); }).join(', ') : '';
+    $('#pres').innerHTML = (S.st.presence || []).length ? '<span class="dot"></span>접속 중: ' + (S.st.presence || []).map(function (p) { return '<span title="' + esc(fieldLabel(p.field)) + '">' + esc(p.name) + (p.name === S.me ? '(나)' : '') + ' · ' + esc(pageLabel(p.page)) + '</span>'; }).join(', ') : '';
+    renderWho();
     renderNav();
   }
   function renderNav() {
@@ -140,13 +163,16 @@
 
   async function show(id) {
     if (id !== 'home' && !pageOf(id)) id = 'home';
-    await saveNow();
+    await flush();
+    S.focus = '';
     S.page = id; history.replaceState(null, '', '#' + id);
     renderNav();
     const main = $('#main');
     main.innerHTML = id === 'home' ? homeHtml() : pageHtml(pageOf(id));
     window.scrollTo(0, 0);
     if (id !== 'home') { $$('textarea', main).forEach(updateCount); }
+    renderWho();
+    if (id !== 'home' && pageOf(id) === S.schema.pages[S.schema.pages.length - 1]) { ensureReport(); loadFeedback(); }
     pollNow();
   }
 
@@ -171,6 +197,7 @@
       '<div class="card"><h2>' + t.cls + '반 ' + t.no + '조 · ' + esc(t.field) + '</h2>' +
       '<p>이 공간은 <b>우리 조 모두가 함께</b> 쓰는 하나의 프로젝트예요. 글을 쓰면 몇 초 안에 <b>자동으로 저장</b>되고, 조원이 고친 내용도 곧 화면에 나타납니다. 같은 칸을 동시에 고치면 충돌 안내가 뜨니 먼저 상의해요.</p>' +
       '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>이름</th><th>역할</th></tr></thead><tbody>' + roleRows + '</tbody></table></div></div>' +
+      schedHtml() +
       '<div class="card"><h2>진행 단계</h2><div class="tbl-wrap"><table class="tbl"><thead><tr><th>단계</th><th>주로 맡는 역할</th><th>작성 진행률</th></tr></thead><tbody>' + pages + '</tbody></table></div>' +
       '<p class="small muted">역할은 "주로 맡는" 기준일 뿐, 모든 조원이 어느 페이지든 함께 쓰고 고칠 수 있어요. (※ 마지막 페이지의 "나의 기여" 칸은 본인만 쓸 수 있어요.)</p></div>' +
       '<div class="card"><h2>평가 기준 미리 보기</h2><p class="small muted">아래 기준에 따라 선생님이 평가합니다. 각 단계를 쓸 때 기준을 떠올려 보세요.</p>' + rub +
@@ -195,7 +222,7 @@
     pg.sections.forEach(function (sc) {
       h += '<div class="card"><h3>' + esc(sc.title) + '</h3>' + sc.fields.map(fieldHtml).join('') + '</div>';
     });
-    if (pg.id === S.schema.pages[S.schema.pages.length - 1].id) h += submitHtml();
+    if (pg.id === S.schema.pages[S.schema.pages.length - 1].id) h += tailHtml();
     h += '<div class="row no-print" style="justify-content:space-between">' + navBtn(pg, -1) + navBtn(pg, 1) + '</div>';
     return h;
   }
@@ -226,11 +253,11 @@
       case 'textarea': ctl = '<textarea id="f_' + esc(id) + '" data-fid="' + esc(id) + '" placeholder="' + esc(f.ph || '') + '"' + dis + '>' + esc(v) + '</textarea><div class="cnt" data-cnt="' + esc(id) + '"></div>'; break;
       case 'select': ctl = '<select id="f_' + esc(id) + '" data-fid="' + esc(id) + '"' + dis + '><option value="">선택하세요</option>' + f.opts.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>'; break;
       case 'multiselect': { const sel = v.split('|'); ctl = '<div class="opts" data-fid="' + esc(id) + '" data-multi="1">' + f.opts.map(function (o) { return '<label><input type="checkbox" value="' + esc(o) + '"' + (sel.indexOf(o) >= 0 ? ' checked' : '') + dis + '>' + esc(o) + '</label>'; }).join('') + '</div>'; break; }
-      case 'checkbox': ctl = '<label style="font-weight:400"><input type="checkbox" id="f_' + esc(id) + '" data-fid="' + esc(id) + '" data-check="1"' + (v === 'Y' ? ' checked' : '') + dis + '> ' + esc(f.ph || '확인했어요') + '</label>'; return '<div class="field" data-field="' + esc(id) + '">' + '<div class="f" style="font-weight:600">' + label + '</div>' + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div></div>';
+      case 'checkbox': ctl = '<label style="font-weight:400"><input type="checkbox" id="f_' + esc(id) + '" data-fid="' + esc(id) + '" data-check="1"' + (v === 'Y' ? ' checked' : '') + dis + '> ' + esc(f.ph || '확인했어요') + '</label>'; return '<div class="field" data-field="' + esc(id) + '">' + '<div class="f" style="font-weight:600">' + label + '</div>' + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div><div class="who-here" data-who="' + esc(id) + '"></div></div>';
       case 'file': ctl = fileHtml(f, id); break;
       default: ctl = '<input id="f_' + esc(id) + '" data-fid="' + esc(id) + '" type="' + (f.type === 'number' ? 'number' : f.type === 'url' ? 'url' : 'text') + '"' + (f.type === 'number' ? ' step="any"' : '') + ' value="' + esc(v) + '" placeholder="' + esc(f.ph || '') + '"' + dis + '>';
     }
-    return '<div class="field" data-field="' + esc(id) + '">' + (f.type === 'file' ? '<div class="f" style="font-weight:600">' + label + '</div>' : lab) + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div></div>';
+    return '<div class="field" data-field="' + esc(id) + '">' + (f.type === 'file' ? '<div class="f" style="font-weight:600">' + label + '</div>' : lab) + hint + ctl + '<div class="stat" data-stat="' + esc(id) + '"></div><div class="who-here" data-who="' + esc(id) + '"></div></div>';
   }
 
   /* ---- 파일 칸 ---- */
@@ -287,12 +314,18 @@
   }
   function setSaveState(t) { const e = $('#saveState'); if (e) e.textContent = t; }
 
-  async function saveNow() {
+  // 저장은 한 번에 하나씩. 진행 중이면 그 저장이 끝나길 기다릴 수 있도록 약속(Promise)을 돌려준다
+  function saveNow() {
     clearTimeout(S.timer);
-    if (S.saving || !S.st || locked()) return;
+    if (S.inflight) return S.inflight;
+    if (!S.st || locked()) return Promise.resolve();
+    S.inflight = doSave().then(function () { S.inflight = null; }, function () { S.inflight = null; });
+    return S.inflight;
+  }
+  async function doSave() {
     const ids = Object.keys(S.dirty).filter(function (id) { return !(id in S.conflicts); });
     if (!ids.length) return;
-    S.saving = true; setSaveState('저장 중…');
+    S.saveFailed = false; setSaveState('저장 중…');
     const sent = {}, fields = {};
     ids.forEach(function (id) { sent[id] = S.dirty[id]; fields[id] = { val: S.dirty[id], baseV: S.base[id] || 0 }; setFieldClass(id, 'saving'); });
     try {
@@ -307,13 +340,25 @@
       setSaveState(r.conflicts.length ? '⚠ 충돌이 있어요' : '✓ 저장됨 ' + new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       renderNav();
     } catch (e) {
+      S.saveFailed = true;
       ids.forEach(function (id) { setFieldClass(id, 'dirty'); });
       if (!fatal(e)) {
-        if (e.code === 'LOCKED') { toast(e.message, 'err'); S.st = await api('loadProject', { page: S.page }, S.token).catch(function () { return S.st; }); renderTop(); show(S.page); }
+        if (e.code === 'LOCKED') { toast(e.message, 'err'); S.st = await api('loadProject', { page: S.page, tid: VIEW || undefined }, S.token).catch(function () { return S.st; }); renderTop(); show(S.page); }
         else { setSaveState('⚠ 저장 실패(다시 시도 중)'); toast(e.message, 'err'); S.timer = setTimeout(saveNow, 6000); }
       }
-    } finally { S.saving = false; }
-    if (Object.keys(S.dirty).some(function (id) { return !(id in S.conflicts); })) S.timer = setTimeout(saveNow, 800);
+    }
+    if (!S.saveFailed && Object.keys(S.dirty).some(function (id) { return !(id in S.conflicts); })) S.timer = setTimeout(saveNow, 800);
+  }
+  // 나가기 등에서 쓰는 "모두 저장될 때까지 기다리기". 저장하지 못한 칸 id 목록을 돌려준다
+  async function flush() {
+    for (let i = 0; i < 6; i++) {
+      if (S.inflight) await S.inflight;
+      const pending = Object.keys(S.dirty).filter(function (id) { return !(id in S.conflicts); });
+      if (!pending.length || S.saveFailed) break;
+      await saveNow();
+    }
+    if (S.inflight) await S.inflight;
+    return Object.keys(S.dirty);
   }
   function setFieldClass(id, cls) { const w = $('[data-field="' + id + '"]'); if (w) w.className = 'field ' + cls; }
 
@@ -369,14 +414,60 @@
   function fieldDef(id) { let r = null; S.schema.pages.forEach(function (p) { p.sections.forEach(function (s) { s.fields.forEach(function (f) { if (f.id === id.split('@')[0]) r = f; }); }); }); return r; }
 
   /* ───────── 제출 ───────── */
+  function leftText(ms) {
+    const d = ms - Date.now(); if (d <= 0) return '마감 시각이 지났어요';
+    const h = Math.floor(d / 3600000), m = Math.floor(d % 3600000 / 60000);
+    return h >= 24 ? Math.floor(h / 24) + '일 ' + (h % 24) + '시간 남았어요' : h + '시간 ' + m + '분 남았어요';
+  }
+  function deadlineHtml() {
+    const d = S.st.deadline; if (!d) return '';
+    const passed = Date.now() > d.ms;
+    return '<div class="banner ' + (passed ? 'bad' : 'info') + '"><b>최종 제출 마감: ' + esc(d.at) + '</b> · <span data-left="' + d.ms + '">' + esc(leftText(d.ms)) + '</span><br><span class="small">마감 안에 <b>팀장이 최종 제출</b>을 하고, 조원 모두 6-2 "나의 기여"에 자기가 한 일을 적어 주세요.' + (d.lock ? ' 마감 뒤에는 수정할 수 없어요.' : '') + '</span></div>';
+  }
+  function schedHtml() {
+    return deadlineHtml() + '<div class="card"><h2>수행평가 진행 안내</h2><div class="tbl-wrap"><table class="tbl"><tbody>' +
+      '<tr><th>1차시</th><td>팀원이 <b>1. 문제 정의</b>를 나누어 써요. 데이터 엔지니어는 <b>2. 데이터 수집·전처리</b>를 시작해요.</td></tr>' +
+      '<tr><th>2차시</th><td>1번 정리를 마무리해요. 데이터 엔지니어는 2번을 쓰고 <b>코랩 파일 링크와 필요한 파일</b>을 올려요(2-4). <b>팀장</b>이 그 코랩을 직접 실행해 오류를 점검하고, 고친 파일을 모델 개발자에게 전달해요. 모델 개발자는 고친 파일에 이어서 모델 개발을 시작해요.</td></tr>' +
+      '<tr><th>3차시</th><td>모델 개발자가 <b>3. 모델 개발·평가</b>를 쓰고, <b>팀장</b>이 그 코랩을 실행해 오류를 점검해요(3-3). 도메인 분석가와 AI 윤리·소통 담당은 고친 파일을 받아 <b>4번·5번</b>을 써요.</td></tr>' +
+      '<tr><th>최종 제출</th><td>마지막 수행평가 뒤 <b>' + ((S.st.deadline && S.st.deadline.hours) || 48) + '시간 안에</b> 팀장이 제출해요. 조원은 그 안에 6-2 "나의 기여"를 써요.</td></tr></tbody></table></div>' +
+      '<p class="small muted">선생님이 각 차시마다 참여도와, 어떤 질문과 고민을 했는지를 기록해요. 궁금한 점은 주저하지 말고 질문해 보세요.</p></div>';
+  }
+  function reportCardHtml() {
+    const t = S.st.team, id = t.reportId;
+    if (!id) return '<div class="card" id="reportCard"><h2>우리 조 보고서 · PDF · 링크</h2><p class="muted">보고서 링크를 만드는 중…</p></div>';
+    const link = PJ.reportLink(id);
+    return '<div class="card" id="reportCard"><h2>우리 조 보고서 · PDF · 링크</h2>' +
+      '<p>지금까지 쓴 내용이 하나의 보고서로 정리돼요. 제출 전에도 열어 볼 수 있고, <b>고쳐 쓰면 같은 링크에 바로 반영</b>돼요. 이 링크를 따로 저장해 두면 나중에도 우리 조 보고서(와 교사 피드백)를 다시 볼 수 있어요.</p>' +
+      '<p><label class="f" for="rlink">보고서 링크</label><input id="rlink" type="text" readonly value="' + esc(link) + '" onclick="this.select()"></p>' +
+      '<div class="row"><a class="btn" href="' + esc(link) + '" target="_blank" rel="noopener">보고서 열기</a>' +
+      '<a class="btn ghost" href="' + esc(link + '&print=1') + '" target="_blank" rel="noopener">PDF로 저장하기</a>' +
+      '<button class="btn ghost" data-copy="' + esc(link) + '">링크 복사</button></div>' +
+      '<p class="small muted">"PDF로 저장하기"를 누르면 인쇄 창이 열려요. 대상(프린터)을 <b>PDF로 저장</b>으로 고르고 저장하세요. 제출 전에는 보고서 위쪽에 "작성 중"이라고 표시돼요.</p></div>';
+  }
   function submitHtml() {
     if (S.st.locked || S.viewOnly) return '';
-    const miss = missingList();
-    return '<div class="card" id="submitCard"><h2>교사에게 제출하기</h2>' +
-      (miss.length ? '<div class="banner warn"><b>아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요.</b><ul class="small">' + miss.slice(0, 12).map(function (m) { return '<li><a href="#' + m.page + '" data-go="' + m.page + '" onclick="return false">' + esc(pageOf(m.page).no + '단계') + '</a> ' + esc(m.label) + '</li>'; }).join('') + (miss.length > 12 ? '<li>…외 ' + (miss.length - 12) + '개</li>' : '') + '</ul></div>' : '<div class="banner ok">필수 항목을 모두 작성했어요. 제출 전에 한 번 더 읽어 보세요.</div>') +
-      '<p>제출하면 <b>더 이상 수정할 수 없고</b>, 우리 조의 보고서 페이지가 만들어져요. 조원 모두 확인했나요?</p>' +
-      '<p><button class="btn" id="submitBtn">교사에게 제출하기</button></p></div>';
+    const miss = missingList(), rule = S.st.submitRule || { canSubmit: true, leaders: [] };
+    const head = '<div class="card" id="submitCard"><h2>교사에게 최종 제출하기</h2>';
+    if (!rule.canSubmit) return head + '<div class="banner info"><b>최종 제출은 팀장(' + esc(rule.leaders.join(', ')) + ')이 해요.</b><br><span class="small">나는 6-2 "나의 기여"에 내가 한 일을 쓰면 돼요. 마감 전에 팀장이 제출하니, 다 썼다면 팀장에게 알려 주세요.</span></div>' +
+      (miss.length ? '<p class="small">아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요. 팀장과 함께 확인해 보세요.</p>' : '') + '</div>';
+    return head +
+      (miss.length ? '<div class="banner warn"><b>아직 비어 있는 필수 항목이 ' + miss.length + '개 있어요.</b><ul class="small">' + miss.slice(0, 12).map(function (m) { return '<li><a href="#' + m.page + '" data-go="' + m.page + '" onclick="return false">' + esc(pageOf(m.page).no + '단계') + '</a> ' + esc(m.label) + '</li>'; }).join('') + (miss.length > 12 ? '<li>…외 ' + (miss.length - 12) + '개</li>' : '') + '</ul></div>' : '<div class="banner ok">필수 항목을 모두 채웠어요.</div>') +
+      '<p>제출하면 <b>더 이상 수정할 수 없어요.</b> 조원 모두가 6-2 "나의 기여"를 썼는지 확인했나요?</p>' +
+      '<p><button class="btn" id="submitBtn">교사에게 최종 제출하기</button></p></div>';
   }
+  function tailHtml() {
+    return reportCardHtml() + deadlineHtml() + submitHtml() + '<div id="fbBox">' + (S.fb ? PJ.feedbackHtml(S.fb) : '') + '</div>';
+  }
+  async function ensureReport() {
+    const t = S.st.team; if (t.reportId || S.viewOnly) { if (!t.reportId) { const c = $('#reportCard'); if (c) c.remove(); } return; }
+    try { const r = await api('getReportLink', {}, S.token); t.reportId = r.reportId; t.reportUrl = r.reportUrl; const c = $('#reportCard'); if (c) c.outerHTML = reportCardHtml(); }
+    catch (e) { if (!fatal(e)) { const c = $('#reportCard'); if (c) c.insertAdjacentHTML('beforeend', '<p class="small" style="color:var(--bad)">보고서 링크를 만들지 못했어요: ' + esc(e.message) + '</p>'); } }
+  }
+  async function loadFeedback() {
+    try { const r = await api('getFeedback', { tid: VIEW || undefined }, S.token); S.fb = r.feedback; const b = $('#fbBox'); if (b) b.innerHTML = S.fb ? PJ.feedbackHtml(S.fb) : ''; }
+    catch (e) { fatal(e); }
+  }
+  setInterval(function () { $$('[data-left]').forEach(function (e) { e.textContent = leftText(Number(e.dataset.left)); }); }, 30000);
   async function doSubmit() {
     const miss = missingList();
     const msg = (miss.length ? '필수 항목 ' + miss.length + '개가 비어 있어요.\n그래도 제출할까요?\n\n' : '') + '제출하면 수정할 수 없어요. 정말 제출할까요?';
@@ -390,7 +481,7 @@
       renderTop(); await show(S.page);
       toast('제출했어요! 보고서가 만들어졌어요.', 'ok');
       return r;
-    } catch (e) { if (!fatal(e)) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '교사에게 제출하기'; } }
+    } catch (e) { if (!fatal(e)) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '교사에게 최종 제출하기'; } }
   }
 
   /* ───────── 실시간 반영(8초마다 확인) ───────── */
@@ -401,11 +492,11 @@
   async function poll() {
     if (polling || !S.st || !S.token) return; polling = true;
     try {
-      const r = await api('pollProject', { rev: S.st.rev, page: S.page, tid: VIEW || undefined }, S.token);
+      const r = await api('pollProject', { rev: S.st.rev, page: S.page, field: S.focus || '', tid: VIEW || undefined }, S.token);
       S.st.presence = r.presence;
       if (r.changed) {
         const wasLocked = S.st.locked;
-        S.st.rev = r.rev; S.st.content = r.content; S.st.files = r.files; S.st.locked = r.locked; S.st.team = r.team; S.st.members = r.members; S.st.progress = r.progress;
+        S.st.rev = r.rev; S.st.content = r.content; S.st.files = r.files; S.st.locked = r.locked; S.st.team = r.team; S.st.members = r.members; S.st.progress = r.progress; S.st.deadline = r.deadline; S.st.submitRule = r.submitRule;
         if (wasLocked !== r.locked) { renderTop(); await show(S.page); }
         else applyRemote();
       }

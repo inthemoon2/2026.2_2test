@@ -2,7 +2,7 @@
 (function () {
   const { esc, $, $$, api, toast } = PJ;
   const app = document.getElementById('app');
-  const A = { token: PJ.store.get('pj_admin') || '', tab: 'overview', ov: null, schema: null, team: null, filter: '', roster: null, peer: null, lastPw: null };
+  const A = { token: PJ.store.get('pj_admin') || '', tab: 'overview', ov: null, schema: null, team: null, filter: '', roster: null, peer: null, lastPw: null, sess: { sub: 1, cls: '', q: {}, fbTid: '', fb: null, data: null } };
 
   const call = async function (action, payload) {
     try { return await api(action, payload, A.token); }
@@ -28,7 +28,7 @@
   async function boot() {
     if (!A.token) return renderLogin();
     try { A.schema = A.schema || await api('schema'); await loadOverview(); } catch (e) { if (e.code === 'BAD_TOKEN' || e.code === 'EXPIRED') return logout(e.message); app.innerHTML = '<div class="wrap"><div class="banner bad">' + esc(e.message) + '</div></div>'; return; }
-    const tabs = [['overview', '진행 현황'], ['roster', '명단 · 비밀번호'], ['score', '채점 · 세특 재료'], ['table', '채점표'], ['peer', '동료평가 가져오기'], ['settings', '설정']];
+    const tabs = [['overview', '진행 현황'], ['sess', '차시별 점검'], ['roster', '명단 · 비밀번호'], ['score', '채점 · 세특 재료'], ['table', '채점표'], ['peer', '동료평가 가져오기'], ['settings', '설정']];
     app.innerHTML = '<header class="top"><div class="wrap"><b>관리자 · 사회문제 해결 기계학습 프로젝트</b><span class="grow"></span><a class="btn sm" href="index.html">학생 화면</a><button class="btn sm" id="lo">로그아웃</button></div></header>' +
       '<nav class="nav" id="nav">' + tabs.map(function (t) { return '<button data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</nav><main class="wrap wide" id="main"></main>';
     $('#lo').onclick = function () { logout(''); };
@@ -37,6 +37,15 @@
     $('#main').addEventListener('change', onChange);
     go(A.tab);
   }
+  let mouseDown = false;
+  document.addEventListener('mousedown', function () { mouseDown = true; }, true);
+  document.addEventListener('mouseup', function () { mouseDown = false; }, true);
+  setInterval(async function () {
+    if (A.tab !== 'overview' || !A.token || document.hidden || mouseDown) return;
+    const ae = document.activeElement; if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.id !== 'clsf') return;
+    try { await loadOverview(); if (A.tab === 'overview' && !mouseDown) { const m = $('#main'); const y = window.scrollY; m.innerHTML = overviewHtml(); window.scrollTo(0, y); } } catch (e) { /* 다음 주기에 다시 */ }
+  }, 15000);
+
   async function go(t) {
     const my = (A.nav = (A.nav || 0) + 1);    // 탭을 빠르게 바꿨을 때 먼저 시작한 화면이 나중에 덮어쓰지 않도록
     A.tab = t;
@@ -44,6 +53,7 @@
     const main = $('#main');
     try {
       if (t === 'overview') { await loadOverview(); if (my !== A.nav) return; main.innerHTML = overviewHtml(); }
+      else if (t === 'sess') { await flushSess(); await loadSess(); if (my !== A.nav) return; main.innerHTML = sessHtml(); }
       else if (t === 'roster') { await loadOverview(); if (my !== A.nav) return; main.innerHTML = rosterHtml(); }
       else if (t === 'score') { await loadOverview(); if (my !== A.nav) return; main.innerHTML = scoreShellHtml(); if (A.team) loadTeam(A.team.team ? A.team.team.tid : A.team); }
       else if (t === 'table') { main.innerHTML = '<p class="muted">채점표를 불러오는 중…</p>'; const r = await call('scoreTable'); if (my !== A.nav) return; A.table = r; main.innerHTML = tableHtml(); }
@@ -57,6 +67,8 @@
   }
 
   /* ───────── 진행 현황 ───────── */
+  function pageLabel(id) { if (!id || id === 'home') return '팀 홈'; const pg = (A.ov.pages || []).filter(function (p) { return p.id === id; })[0]; return pg ? pg.no + '단계 ' + pg.title : id; }
+  function fieldLabel(id) { if (!id) return ''; let r = ''; ((A.schema || {}).pages || []).forEach(function (p) { p.sections.forEach(function (s) { s.fields.forEach(function (f) { if (f.id === String(id).split('@')[0]) r = f.label; }); }); }); return r ? '보는 칸: ' + r : ''; }
   function overviewHtml() {
     const o = A.ov, classes = Array.from(new Set(o.teams.map(function (t) { return t.cls; })));
     const teams = o.teams.filter(function (t) { return !A.filter || t.cls === A.filter; });
@@ -65,14 +77,14 @@
     return '<div class="card"><div class="row"><h2 class="grow" style="margin:0">진행 현황</h2>' +
       '<select id="clsf" style="width:auto"><option value="">전체 반</option>' + classes.map(function (c) { return '<option value="' + esc(c) + '"' + (A.filter === c ? ' selected' : '') + '>' + esc(c) + '반</option>'; }).join('') + '</select>' +
       '<button class="btn ghost sm" data-act="refresh">새로고침</button></div>' +
-      '<p class="small muted">조 ' + teams.length + '개 · 제출 완료 ' + sub + '개. 단계별 숫자는 필수 항목 작성 비율(%)입니다.</p>' +
-      '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>반-조</th><th>분야</th><th>상태</th><th>전체</th>' + o.pages.map(function (p) { return '<th title="' + esc(p.title) + '">' + p.no + '단계</th>'; }).join('') + '<th>마지막 수정</th><th>점검</th><th></th></tr></thead><tbody>' +
+      '<p class="small muted">조 ' + teams.length + '개 · 제출 완료 ' + sub + '개. 단계별 숫자는 필수 항목 작성 비율(%)입니다. <b>접속 중</b>은 최근 40초 안에 화면을 연 학생과 그 위치이고, 15초마다 자동으로 갱신돼요.</p>' +
+      '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>반-조</th><th>분야</th><th>상태</th><th>전체</th>' + o.pages.map(function (p) { return '<th title="' + esc(p.title) + '">' + p.no + '단계</th>'; }).join('') + '<th>접속 중 (위치)</th><th>마지막 수정</th><th>점검</th><th></th></tr></thead><tbody>' +
       teams.map(function (t) {
         const warn = []; if (!t.hasPw) warn.push('<span class="badge warn">비번 미발급</span>'); if (t.noSid) warn.push('<span class="badge warn">학번 ' + t.noSid + '명 없음</span>'); if (t.nStudents < 3 || t.nStudents > 5) warn.push('<span class="badge warn">' + t.nStudents + '명</span>');
-        return '<tr><td><b>' + esc(t.cls) + '-' + esc(t.no) + '</b></td><td>' + esc(t.field) + '</td><td>' + (t.status === '제출완료' ? '<span class="badge ok">제출 완료</span>' : '<span class="badge">작성 중</span>') + (t.scored ? ' <span class="badge brand">채점됨</span>' : '') + '</td>' +
+        return '<tr><td><b>' + esc(t.cls) + '-' + esc(t.no) + '</b></td><td>' + esc(t.field) + '</td><td>' + (t.status === '제출완료' ? '<span class="badge ok">제출 완료</span>' : '<span class="badge">작성 중</span>') + (t.late ? ' <span class="badge bad" title="마감 시각 이후에 제출했어요">마감 후 제출</span>' : '') + (t.scored ? ' <span class="badge brand">채점됨</span>' : '') + '</td>' +
           '<td style="min-width:90px"><div class="bar' + (t.progress === 100 ? ' full' : '') + '"><i style="width:' + t.progress + '%"></i></div><span class="small">' + t.progress + '%</span></td>' +
           o.pages.map(function (p) { const v = t.pages[p.id]; return '<td class="small">' + (v == null ? '-' : v + '%') + '</td>'; }).join('') +
-          '<td class="small">' + esc(t.lastEdit || '-') + '<br><span class="muted">' + esc(t.lastBy || '') + '</span></td><td>' + warn.join(' ') + '</td>' +
+          '<td class="small">' + (t.online && t.online.length ? t.online.map(function (p) { return '<div title="' + esc(fieldLabel(p.field)) + '"><span class="dot"></span>' + esc(p.name) + ' · ' + esc(pageLabel(p.page)) + '</div>'; }).join('') : '<span class="muted">-</span>') + '</td><td class="small">' + esc(t.lastEdit || '-') + '<br><span class="muted">' + esc(t.lastBy || '') + '</span></td><td>' + warn.join(' ') + '</td>' +
           '<td style="white-space:nowrap"><button class="btn sm ghost" data-open="' + esc(t.tid) + '">채점·상세</button> <button class="btn sm ghost" data-view="' + esc(t.tid) + '">화면 보기</button> ' + (t.reportId ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(PJ.reportLink(t.reportId)) + '">보고서</a> ' : '') + (t.status === '제출완료' ? '<button class="btn sm danger ghost" data-reopen="' + esc(t.tid) + '">수정 허용</button>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
   }
@@ -290,13 +302,126 @@
     return '<div class="card"><h2>설정</h2><p><label class="f" for="s_school">학교 이름 (세특 "주의 단어" 검사에 사용)</label><input id="s_school" type="text" value="' + esc(s.schoolName) + '" maxlength="40"></p>' +
       '<p><label class="f" for="s_base">결석 학생 기본 점수</label><input id="s_base" type="number" min="0" max="100" value="' + esc(s.baseScore) + '" style="width:120px"></p>' +
       '<p><label class="f" for="s_url">사이트 주소 (보고서 링크의 앞부분)</label><input id="s_url" type="text" value="' + esc(s.siteUrl) + '"><span class="hint">처음 관리자 로그인할 때 자동으로 채워져요. 주소를 바꾸면 이미 만든 보고서 링크도 함께 바뀝니다.</span></p>' +
+      '<h3 style="margin-top:18px">최종 제출 마감과 제출 권한</h3>' +
+      '<p><label class="f" for="s_s3">3차시(마지막 수행평가) 종료 일시</label><input id="s_s3" type="datetime-local" value="' + esc(s.session3At || '') + '" style="max-width:260px"><span class="hint">입력하면 이 시각부터 아래 시간 뒤가 "최종 제출 마감"이에요. 학생 화면에 마감 시각이 표시돼요.</span></p>' +
+      '<p><label class="f" for="s_dh">마감까지 주는 시간 (시간)</label><input id="s_dh" type="number" min="1" max="720" value="' + esc(s.deadlineHours || '48') + '" style="width:120px"></p>' +
+      '<p><label><input type="checkbox" id="s_dl"' + (s.deadlineLock === '1' ? ' checked' : '') + '> 마감 시각이 지나면 수정·파일 올리기·제출을 막기</label><br><span class="small muted">끄면 마감 뒤에도 제출은 되지만 진행 현황에 "마감 후 제출"로 표시돼요.</span></p>' +
+      '<p><label><input type="checkbox" id="s_ls"' + (s.leaderSubmit !== '0' ? ' checked' : '') + '> 최종 제출은 팀장(프로젝트 매니저)만 할 수 있게 하기</label></p>' +
       '<button class="btn" data-act="save-settings">저장</button></div>' +
       '<div class="card"><h2>구글 시트 안내</h2><p class="small">모든 데이터는 연결된 구글 시트에 있어요. 주요 탭: <b>제출</b>(조별 보고서 한 줄), <b>채점표</b>(학생별 점수), <b>가상채점</b>(규칙 기반 제안과 근거), <b>조채점·개인채점</b>(교사 입력), <b>수정이력</b>(누가 언제 얼마나 썼는지), <b>로그</b>. 이 탭들은 화면에서 자동으로 갱신되니 <b>시트에서 직접 고치지 않는 것</b>을 권해요.</p></div>';
+  }
+
+
+  /* ───────── 차시별 점검 ───────── */
+  const LV_TXT = { 1: '참여 미흡', 2: '소극적', 3: '보통', 4: '적극적', 5: '매우 적극적' };
+  const CK_TXT = [['ok', '✓ 충족'], ['part', '△ 보완 필요'], ['no', '✗ 미흡'], ['', '점검 전']];
+  async function loadSess() { A.sess.data = await call('adminSessions', {}); if (!A.sess.cls) { const f = A.sess.data.teams[0]; A.sess.cls = f ? f.cls : ''; } }
+  async function flushSess() { const q = A.sess.q; await Promise.all(Object.keys(q).map(function (k) { return q[k]; })); }
+
+  function sessHtml() {
+    const S = A.sess, d = S.data;
+    if (!d.teams.length) return '<div class="card"><h2>차시별 점검</h2><p>아직 등록된 조가 없어요. "명단 · 비밀번호" 탭에서 역할표를 먼저 올려 주세요.</p></div>';
+    const classes = Array.from(new Set(d.teams.map(function (t) { return t.cls; })));
+    const teams = d.teams.filter(function (t) { return !S.cls || t.cls === S.cls; });
+    let h = '<div class="card"><div class="row"><h2 class="grow" style="margin:0">차시별 점검</h2><select id="sclf" style="width:auto" aria-label="반 선택">' + classes.map(function (c) { return '<option value="' + esc(c) + '"' + (S.cls === c ? ' selected' : '') + '>' + esc(c) + '반</option>'; }).join('') + '</select></div>' +
+      '<p class="small muted">수업 중에 학생별 참여도를 누르고, 잘한 점과 질문·고민을 적어 두세요. <b>누르거나 입력하면 바로 저장</b>돼요. 기록은 마지막 "최종 피드백"에서 자동 정리됩니다.' +
+      (d.deadline ? '<br>최종 제출 마감: <b>' + esc(d.deadline.at) + '</b> (3차시 ' + esc(d.deadline.baseAt) + ' + ' + d.deadline.hours + '시간' + (d.deadline.lock ? ', 마감 후 수정 잠금' : '') + ')' : '<br>최종 제출 마감이 아직 정해지지 않았어요. "설정" 탭에서 3차시 종료 일시를 입력하면 48시간 뒤가 자동으로 마감돼요.') + '</p>' +
+      '<div class="sess-tabs" role="group" aria-label="차시 선택">' + [1, 2, 3].map(function (n) { return '<button data-sub="' + n + '" aria-pressed="' + (S.sub === n) + '">' + n + '차시</button>'; }).join('') + '<button data-sub="fb" aria-pressed="' + (S.sub === 'fb') + '">최종 피드백</button></div>';
+    h += S.sub === 'fb' ? fbBody(teams) : sessBody(S.sub, teams);
+    return h + '</div>';
+  }
+  function sessBody(n, teams) {
+    const sess = A.sess.data.sessions[n - 1];
+    return '<div class="banner info small"><b>' + esc(sess.title) + '</b> · ' + esc(sess.desc) + '</div>' +
+      '<p class="small muted">참여도: ' + [5, 4, 3, 2, 1].map(function (k) { return k + ' ' + LV_TXT[k]; }).join(' · ') + '</p>' + teams.map(function (t) { return teamCard(t, n); }).join('');
+  }
+  function hintHtml(h) { return !h ? '' : (typeof h === 'string' ? esc(h) : '<a href="' + esc(h.url) + '" target="_blank" rel="noopener">코랩 파일 열어 보기 ↗</a>'); }
+  function teamCard(t, n) {
+    const sess = A.sess.data.sessions[n - 1], tc = t.team[n], hs = (t.hints || {})[n] || {};
+    let h = '<details class="card sesscard" open data-tid="' + esc(t.tid) + '" data-n="' + n + '"><summary><b>' + esc(t.cls) + '-' + esc(t.no) + '</b> ' + esc(t.field) +
+      ' <span class="badge brand">팀장 ' + esc(t.leaders.join(', ') || '미지정') + '</span> <span class="small muted" data-sum></span><span class="grow"></span><span class="savestate" data-ss></span></summary><div class="sbody">';
+    if (sess.checks.length) {
+      h += '<h4 style="margin:6px 0 0">점검 항목</h4>' + sess.checks.map(function (c, i) {
+        return '<div class="chkrow"><div><b>' + (i + 1) + '.</b> ' + esc(c.label) + '</div><div class="small muted">' + hintHtml(hs['c' + (i + 1)]) + '</div>' +
+          '<div class="seg chk" role="radiogroup" aria-label="' + esc(c.short) + '">' + CK_TXT.map(function (o) { return '<label><input type="radio" name="ck_' + esc(t.tid) + '_' + n + '_' + i + '" value="' + o[0] + '"' + (tc.c[i] === o[0] ? ' checked' : '') + '>' + o[1] + '</label>'; }).join('') + '</div></div>';
+      }).join('') + (hs.fix ? '<p class="small">팀장이 전달한 수정 완료 코랩: <a href="' + esc(hs.fix) + '" target="_blank" rel="noopener">열어 보기 ↗</a></p>' : '');
+    }
+    h += '<h4 style="margin:10px 0 0">학생별 참여도와 기록</h4>' + t.members.map(function (m, idx) {
+      const r = m.rec[n], nm = 'pl_' + t.tid + '_' + n + '_' + idx;
+      return '<div class="stu-grid" data-name="' + esc(m.name) + '"><div><b>' + esc(m.name) + '</b>' + (m.absent ? ' <span class="badge bad">결석</span>' : '') + '<div class="small muted">' + esc(m.roles.join(' · ') || '역할 미지정') + '</div></div><div>' +
+        '<div class="seg" role="radiogroup" aria-label="' + esc(m.name) + ' 참여도 5단계">' + [5, 4, 3, 2, 1].map(function (k) { return '<label><input type="radio" name="' + nm + '" value="' + k + '"' + (r.level === k ? ' checked' : '') + '>' + k + ' ' + LV_TXT[k] + '</label>'; }).join('') + '<label title="기록 지우기"><input type="radio" name="' + nm + '" value="0"' + (!r.level ? ' checked' : '') + '>기록 없음</label></div>' +
+        '<label class="f small" style="margin-top:6px">잘한 점 · 특이사항 (비고)</label><textarea data-f="note" rows="2" maxlength="1000" placeholder="예) 조원의 질문에 차분히 답하며 역할 분담을 이끌었다.">' + esc(r.note) + '</textarea>' +
+        '<label class="f small">적극적으로 질문하거나 고민한 내용</label><textarea data-f="ask" rows="2" maxlength="1500" placeholder="예) 결측치를 평균으로 채워도 되는지 질문함.">' + esc(r.ask) + '</textarea></div></div>';
+    }).join('') + '<div style="border-top:1px solid var(--line);padding-top:8px"><label class="f small">조 전체 메모 (이 차시에 대한 총평·특이사항)</label><textarea data-f="memo" rows="2" maxlength="1500">' + esc(tc.memo) + '</textarea></div></div></details>';
+    return h;
+  }
+  function sessSummary(card) {
+    const g = $$('.stu-grid', card), done = g.filter(function (x) { const r = x.querySelector('input[type=radio]:checked'); return r && Number(r.value) > 0; }).length;
+    const ck = $$('.chkrow', card), ckd = ck.filter(function (x) { const r = x.querySelector('input:checked'); return r && r.value; }).length;
+    const el = $('[data-sum]', card); if (el) el.textContent = '· 참여도 ' + done + '/' + g.length + '명' + (ck.length ? ' · 점검 ' + ckd + '/' + ck.length : '');
+  }
+  function sessPayload(card) {
+    const tid = card.dataset.tid, n = Number(card.dataset.n);
+    return {
+      tid: tid, session: n,
+      students: $$('.stu-grid', card).map(function (g) { const r = g.querySelector('input[type=radio]:checked'); return { name: g.dataset.name, level: r ? Number(r.value) : 0, note: g.querySelector('[data-f="note"]').value, ask: g.querySelector('[data-f="ask"]').value }; }),
+      checks: [0, 1, 2].map(function (i) { const r = card.querySelector('input[name="ck_' + tid + '_' + n + '_' + i + '"]:checked'); return r ? r.value : ''; }),
+      memo: card.querySelector('[data-f="memo"]').value,
+    };
+  }
+  function sessSave(card) {
+    sessSummary(card);
+    const key = card.dataset.tid + '|' + card.dataset.n, ss = $('[data-ss]', card);
+    if (ss) { ss.textContent = '저장 중…'; ss.classList.remove('err'); }
+    const run = async function () {
+      try { await call('saveSession', sessPayload(card)); if (ss) ss.textContent = '✓ 저장됨 ' + new Date().toTimeString().slice(0, 5); }
+      catch (e) { if (ss) { ss.textContent = '저장 실패: ' + e.message; ss.classList.add('err'); } toast(e.message, 'err'); }
+    };
+    A.sess.q[key] = (A.sess.q[key] || Promise.resolve()).then(run);
+    return A.sess.q[key];
+  }
+
+  /* 최종 피드백 */
+  function fbBody(teams) {
+    const S = A.sess;
+    return '<p class="small muted">기록한 참여도·중간 점검·보고서 내용을 모아 <b>피드백 초안이 자동으로 만들어져요.</b> 문장을 고친 뒤 <b>공개</b>하면 학생 화면 6단계와 보고서 맨 끝에 나타납니다. 공개 전에는 학생에게 보이지 않아요.</p>' +
+      '<div class="row" style="margin-bottom:8px"><button class="btn sm" data-act="fb-pub-all">이 반 전체 공개</button><button class="btn sm ghost" data-act="fb-unpub-all">이 반 전체 비공개</button></div>' +
+      '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>반-조</th><th>분야</th><th>학생에게</th><th>개인별 내용</th><th></th></tr></thead><tbody>' + teams.map(function (t) {
+        return '<tr' + (S.fbTid === t.tid ? ' style="background:var(--brand-l)"' : '') + '><td><b>' + esc(t.cls) + '-' + esc(t.no) + '</b></td><td>' + esc(t.field) + '</td><td>' + (t.fb.published ? '<span class="badge ok">공개 중</span>' : '<span class="badge">비공개</span>') + (t.fb.edited ? ' <span class="badge brand">교사 수정</span>' : '') + '</td><td class="small">' + (t.fb.showIndividual ? '공개' : '비공개') + '</td><td><button class="btn sm ghost" data-fbopen="' + esc(t.tid) + '">미리보기 · 편집</button></td></tr>';
+      }).join('') + '</tbody></table></div><div id="fbpane">' + (S.fb ? fbPane() : '') + '</div>';
+  }
+  function fbPane() {
+    const f = A.sess.fb, tm = A.sess.data.teams.filter(function (t) { return t.tid === A.sess.fbTid; })[0];
+    return '<div class="card" style="margin-top:14px"><h3>' + esc(tm ? tm.cls + '반 ' + tm.no + '조' : '') + ' 피드백 편집</h3>' +
+      '<label class="f" for="fb_overall">총평 (자동 초안을 고쳐 써도 돼요)</label><textarea id="fb_overall" rows="5" maxlength="3000">' + esc(f.overall) + '</textarea>' +
+      '<label class="f" for="fb_project">프로젝트 내용 평가 한 줄</label><textarea id="fb_project" rows="3" maxlength="3000">' + esc(f.project.comment) + '</textarea>' +
+      '<label class="f" for="fb_note">선생님 한마디 (직접 쓰는 칸, 비워 두면 표시되지 않아요)</label><textarea id="fb_note" rows="3" maxlength="3000">' + esc(f.note) + '</textarea>' +
+      '<p><label><input type="checkbox" id="fb_pub"' + (f.published ? ' checked' : '') + '> 학생에게 공개 (학생 화면 6단계 · 보고서 맨 끝)</label><br><label><input type="checkbox" id="fb_ind"' + (f.showIndividual ? ' checked' : '') + '> 개인별 참여도 표와 "잘한 점·질문·고민" 기록도 함께 공개 <span class="small muted">(보고서 링크를 가진 조원 모두가 볼 수 있어요)</span></label></p>' +
+      '<div class="row"><button class="btn" data-act="fb-save">저장</button><button class="btn ghost" data-act="fb-reset">자동 초안으로 되돌리기</button></div></div>' +
+      '<div style="margin-top:14px">' + PJ.feedbackHtml(f, { admin: true }) + '</div>';
+  }
+  async function openFb(tid) {
+    A.sess.fbTid = tid; A.sess.fb = await call('adminFeedback', { tid: tid });
+    $('#main').innerHTML = sessHtml(); const p = $('#fbpane'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  async function saveFb() {
+    const tid = A.sess.fbTid;
+    await call('saveFeedback', { tid: tid, overall: $('#fb_overall').value, project: $('#fb_project').value, note: $('#fb_note').value, published: $('#fb_pub').checked, showIndividual: $('#fb_ind').checked });
+    toast('피드백을 저장했어요' + ($('#fb_pub').checked ? ' (학생에게 공개 중)' : ' (비공개)'), 'ok');
+    await loadSess(); await openFb(tid);
+  }
+  async function bulkFb(pub) {
+    const teams = A.sess.data.teams.filter(function (t) { return !A.sess.cls || t.cls === A.sess.cls; });
+    if (!confirm(teams.length + '개 조의 피드백을 ' + (pub ? '공개' : '비공개') + '로 바꿀까요?' + (pub ? '\n(자동 초안 그대로 공개돼요. 개인별 내용은 각 조에서 따로 켜야 보여요.)' : ''))) return;
+    await call('setFeedbackPublish', { tids: teams.map(function (t) { return t.tid; }), published: pub });
+    toast('바꿨어요', 'ok'); await loadSess(); $('#main').innerHTML = sessHtml();
   }
 
   /* ───────── 이벤트 ───────── */
   async function onClick(e) {
     const t2 = e.target.closest('[data-t2]'); if (t2) return go(t2.dataset.t2);
+    const sb = e.target.closest('[data-sub]'); if (sb) return guard(async function () { await flushSess(); A.sess.sub = sb.dataset.sub === 'fb' ? 'fb' : Number(sb.dataset.sub); await loadSess(); $('#main').innerHTML = sessHtml(); })();
+    const fo = e.target.closest('[data-fbopen]'); if (fo) return guard(function () { return openFb(fo.dataset.fbopen); })();
     const op = e.target.closest('[data-open]'); if (op) { A.team = { team: { tid: op.dataset.open } }; return go('score').then(function () { const s = $('#tsel'); if (s) s.value = op.dataset.open; }); }
     const vw = e.target.closest('[data-view]'); if (vw) { window.open('index.html?view=' + encodeURIComponent(vw.dataset.view), '_blank'); return; }   // noopener 를 쓰지 않아야 관리자 로그인 정보가 새 탭에 전달돼요
     const ro = e.target.closest('[data-reopen]'); if (ro) { if (!confirm('이 조가 다시 수정할 수 있게 할까요? (보고서 링크는 그대로 유지돼요)')) return; return guard(async function () { await call('reopenTeam', { tid: ro.dataset.reopen }); toast('수정을 허용했어요', 'ok'); go('overview'); })(); }
@@ -306,6 +431,10 @@
     const ac = e.target.closest('[data-act]'); if (!ac) return;
     const act = ac.dataset.act;
     if (act === 'refresh') return go('overview');
+    if (act === 'fb-save') return guard(saveFb)();
+    if (act === 'fb-pub-all') return guard(function () { return bulkFb(true); })();
+    if (act === 'fb-unpub-all') return guard(function () { return bulkFb(false); })();
+    if (act === 'fb-reset') { const f = A.sess.fb; $('#fb_overall').value = f.auto.overall; $('#fb_project').value = f.auto.comment; toast('자동 초안으로 되돌렸어요. 저장을 눌러야 반영돼요.', 'ok'); return; }
     if (act === 'save-team') return saveTeam();
     if (act === 'psend') return peerSend();
     if (act === 'rparse-paste') { const v = $('#rpaste').value; if (!v.trim()) return; return previewRoster(PJ.parseTable(v)); }
@@ -326,9 +455,11 @@
     if (act === 'pw-print') { const s = $('#slips'); const w = document.createElement('div'); w.id = 'printArea'; w.innerHTML = s.innerHTML; document.body.appendChild(w); $$('body > :not(#printArea):not(script)').forEach(function (n) { n.dataset.hid = n.style.display || ' '; n.style.display = 'none'; }); window.print(); $$('[data-hid]').forEach(function (n) { n.style.display = n.dataset.hid === ' ' ? '' : n.dataset.hid; delete n.dataset.hid; }); w.remove(); return; }
     if (act === 'vall') return guard(async function () { const r = await call('runVirtualAll'); toast(r.teams + '개 조의 가상 채점을 "가상채점" 시트에 기록했어요', 'ok'); })();
     if (act === 'tcsv') return PJ.downloadCsv('채점표.csv', [A.table.headers].concat(A.table.rows.map(function (r) { return A.table.headers.map(function (h) { return r[h]; }); })));
-    if (act === 'save-settings') return guard(async function () { const r = await call('saveSettings', { schoolName: $('#s_school').value, baseScore: $('#s_base').value, siteUrl: $('#s_url').value }); A.ov.settings = r.settings; toast('저장했어요', 'ok'); })();
+    if (act === 'save-settings') return guard(async function () { const r = await call('saveSettings', { schoolName: $('#s_school').value, baseScore: $('#s_base').value, siteUrl: $('#s_url').value, session3At: $('#s_s3').value, deadlineHours: $('#s_dh').value, deadlineLock: $('#s_dl').checked, leaderSubmit: $('#s_ls').checked }); A.ov.settings = r.settings; toast('저장했어요', 'ok'); })();
   }
   async function onChange(e) {
+    const sc = e.target.closest('.sesscard'); if (sc) return sessSave(sc);
+    if (e.target.id === 'sclf') return guard(async function () { await flushSess(); A.sess.cls = e.target.value; A.sess.fbTid = ''; A.sess.fb = null; $('#main').innerHTML = sessHtml(); })();
     if (e.target.id === 'ptg' && A.peer) { const h = A.peer.head[Number(e.target.value)] || ''; const r = $('input[name="pkey"][value="' + (/이름|성명/.test(h) ? 'name' : 'sid') + '"]'); if (r) r.checked = true; return; }
     if (e.target.id === 'clsf') { A.filter = e.target.value; $('#main').innerHTML = overviewHtml(); return; }
     if (e.target.id === 'tsel') return guard(function () { return loadTeam(e.target.value); })();
