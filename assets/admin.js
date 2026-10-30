@@ -315,14 +315,14 @@
   /* ───────── 차시별 점검 ───────── */
   const LV_TXT = { 1: '참여 미흡', 2: '소극적', 3: '보통', 4: '적극적', 5: '매우 적극적' };
   const CK_TXT = [['ok', '✓ 충족'], ['part', '△ 보완 필요'], ['no', '✗ 미흡'], ['', '점검 전']];
-  async function loadSess() { A.sess.data = await call('adminSessions', {}); if (!A.sess.cls) { const f = A.sess.data.teams[0]; A.sess.cls = f ? f.cls : ''; } }
+  async function loadSess() { A.sess.data = await call('adminSessions', {}); A.sess.cls = String(A.sess.cls || ''); const have = A.sess.data.teams.some(function (t) { return String(t.cls) === A.sess.cls; }); if (!A.sess.cls || !have) { const f = A.sess.data.teams[0]; A.sess.cls = f ? String(f.cls) : ''; } }
   async function flushSess() { const q = A.sess.q; await Promise.all(Object.keys(q).map(function (k) { return q[k]; })); }
 
   function sessHtml() {
     const S = A.sess, d = S.data;
     if (!d.teams.length) return '<div class="card"><h2>차시별 점검</h2><p>아직 등록된 조가 없어요. "명단 · 비밀번호" 탭에서 역할표를 먼저 올려 주세요.</p></div>';
-    const classes = Array.from(new Set(d.teams.map(function (t) { return t.cls; })));
-    const teams = d.teams.filter(function (t) { return !S.cls || t.cls === S.cls; });
+    const classes = Array.from(new Set(d.teams.map(function (t) { return String(t.cls); })));
+    const teams = d.teams.filter(function (t) { return !S.cls || String(t.cls) === String(S.cls); });
     let h = '<div class="card"><div class="row"><h2 class="grow" style="margin:0">차시별 점검</h2><select id="sclf" style="width:auto" aria-label="반 선택">' + classes.map(function (c) { return '<option value="' + esc(c) + '"' + (S.cls === c ? ' selected' : '') + '>' + esc(c) + '반</option>'; }).join('') + '</select></div>' +
       '<p class="small muted">수업 중에 학생별 참여도를 누르고, 잘한 점과 질문·고민을 적어 두세요. <b>누르거나 입력하면 바로 저장</b>돼요. 기록은 마지막 "최종 피드백"에서 자동 정리됩니다.' +
       (d.deadline ? '<br>최종 제출 마감: <b>' + esc(d.deadline.at) + '</b> (3차시 ' + esc(d.deadline.baseAt) + ' + ' + d.deadline.hours + '시간' + (d.deadline.lock ? ', 마감 후 수정 잠금' : '') + ')' : '<br>최종 제출 마감이 아직 정해지지 않았어요. "설정" 탭에서 3차시 종료 일시를 입력하면 48시간 뒤가 자동으로 마감돼요.') + '</p>' +
@@ -333,7 +333,7 @@
   function sessBody(n, teams) {
     const sess = A.sess.data.sessions[n - 1];
     return '<div class="banner info small"><b>' + esc(sess.title) + '</b> · ' + esc(sess.desc) + '</div>' +
-      '<p class="small muted">참여도: ' + [5, 4, 3, 2, 1].map(function (k) { return k + ' ' + LV_TXT[k]; }).join(' · ') + '</p>' + teams.map(function (t) { return teamCard(t, n); }).join('');
+      '<p class="small muted">참여도: ' + [5, 4, 3, 2, 1].map(function (k) { return k + ' ' + LV_TXT[k]; }).join(' · ') + '</p>' + teams.map(function (t) { try { return teamCard(t, n); } catch (e) { return '<div class="banner bad">' + esc(t.cls + '-' + t.no) + '조를 표시하지 못했어요: ' + esc(e.message) + '</div>'; } }).join('');
   }
   function hintHtml(h) { return !h ? '' : (typeof h === 'string' ? esc(h) : '<a href="' + esc(h.url) + '" target="_blank" rel="noopener">코랩 파일 열어 보기 ↗</a>'); }
   function teamCard(t, n) {
@@ -411,7 +411,7 @@
     await loadSess(); await openFb(tid);
   }
   async function bulkFb(pub) {
-    const teams = A.sess.data.teams.filter(function (t) { return !A.sess.cls || t.cls === A.sess.cls; });
+    const teams = A.sess.data.teams.filter(function (t) { return !A.sess.cls || String(t.cls) === String(A.sess.cls); });
     if (!confirm(teams.length + '개 조의 피드백을 ' + (pub ? '공개' : '비공개') + '로 바꿀까요?' + (pub ? '\n(자동 초안 그대로 공개돼요. 개인별 내용은 각 조에서 따로 켜야 보여요.)' : ''))) return;
     await call('setFeedbackPublish', { tids: teams.map(function (t) { return t.tid; }), published: pub });
     toast('바꿨어요', 'ok'); await loadSess(); $('#main').innerHTML = sessHtml();
@@ -459,7 +459,7 @@
   }
   async function onChange(e) {
     const sc = e.target.closest('.sesscard'); if (sc) return sessSave(sc);
-    if (e.target.id === 'sclf') return guard(async function () { await flushSess(); A.sess.cls = e.target.value; A.sess.fbTid = ''; A.sess.fb = null; $('#main').innerHTML = sessHtml(); })();
+    if (e.target.id === 'sclf') return guard(async function () { await flushSess(); A.sess.cls = String(e.target.value); A.sess.fbTid = ''; A.sess.fb = null; $('#main').innerHTML = sessHtml(); })();
     if (e.target.id === 'ptg' && A.peer) { const h = A.peer.head[Number(e.target.value)] || ''; const r = $('input[name="pkey"][value="' + (/이름|성명/.test(h) ? 'name' : 'sid') + '"]'); if (r) r.checked = true; return; }
     if (e.target.id === 'clsf') { A.filter = e.target.value; $('#main').innerHTML = overviewHtml(); return; }
     if (e.target.id === 'tsel') return guard(function () { return loadTeam(e.target.value); })();
